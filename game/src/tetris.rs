@@ -119,7 +119,7 @@ pub struct PiecePosition {
 }
 
 impl PiecePosition {
-    fn cells(&self) -> [(i8, i8); 4] {
+    pub fn cells(&self) -> [(i8, i8); 4] {
         self.kind.cells().map(|(x, y)| {
             let (x, y) = self.rot.rotate_cell((x, y));
             let x = x + self.x;
@@ -346,6 +346,17 @@ pub struct GameState<B: Board> {
 impl<B: Board> GameState<B> {
     pub fn spawn_next(&mut self) -> Option<PieceState> {
         let kind = self.queue.pop_front().unwrap();
+        self.spawn(kind)
+    }
+
+    pub fn spawn_hold(&mut self, current: PieceKind) -> Option<PieceState> {
+        debug_assert!(self.hold.is_some());
+        let unhold = self.hold.take().unwrap();
+        self.hold = Some(current);
+        self.spawn(unhold)
+    }
+
+    fn spawn(&self, kind: PieceKind) -> Option<PieceState> {
         let mut p = PieceState::new(kind, (4, 19), Rotation::North);
         if self.board.collides(p.pos) {
             p = PieceState::new(kind, (4, 20), Rotation::North);
