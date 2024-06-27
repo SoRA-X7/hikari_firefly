@@ -1,3 +1,4 @@
+mod eval;
 mod graph;
 mod movegen;
 mod search;

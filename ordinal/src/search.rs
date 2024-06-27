@@ -14,6 +14,8 @@ pub struct BotSync {
 
 impl BotSync {
     pub fn search(&self) {
-        self.bot.read().search()
+        if let Some(graph) = &self.bot.read().graph {
+            graph.search();
+        }
     }
 }

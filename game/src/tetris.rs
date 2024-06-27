@@ -452,7 +452,7 @@ impl<B: Board> GameState<B> {
         })
     }
 
-    fn place_piece(&mut self, piece: PieceState) -> PlacementResult {
+    pub fn place_piece(&mut self, piece: PieceState) -> PlacementResult {
         let lines_cleared = self.board.add_piece_and_clear(piece);
         let is_pc = self.board.is_empty();
         let is_b2b = lines_cleared == 4 || piece.spin != SpinKind::None;

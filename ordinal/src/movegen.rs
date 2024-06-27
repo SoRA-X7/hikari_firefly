@@ -41,7 +41,8 @@ pub struct MoveGenerator {
     // Priority queue
     next: BinaryHeap<Step>,
     // Deduplicated lockable positions
-    locked: HashMap<Placement, (PieceState, PiecePosition)>,
+    pub locked: HashMap<Placement, (PieceState, PiecePosition)>,
+    hold_only_move: bool,
 }
 
 impl MoveGenerator {
@@ -50,19 +51,24 @@ impl MoveGenerator {
             tree: HashMap::new(),
             next: BinaryHeap::new(),
             locked: HashMap::new(),
+            hold_only_move: false,
         };
-
-        let current = state.queue.pop_front().unwrap();
 
         let mut state = state.clone();
 
         let spawn = state.spawn_next().ok_or(())?;
         gen.generate_internal(&state, spawn);
 
-        if use_hold & state.hold.is_some() {
-            let hold = state.spawn_hold(spawn.pos.kind);
-            if let Some(hold) = hold {
-                gen.generate_internal(&state, hold);
+        if use_hold {
+            if state.hold.is_some() {
+                let hold = state.spawn_hold(spawn.pos.kind);
+                if let Some(hold) = hold {
+                    if hold.pos.kind != spawn.pos.kind {
+                        gen.generate_internal(&state, hold);
+                    }
+                }
+            } else {
+                gen.hold_only_move = true;
             }
         }
 
@@ -70,22 +76,33 @@ impl MoveGenerator {
     }
 
     fn generate_internal<B: Board>(&mut self, state: &GameState<B>, spawn: PieceState) {
+        self.tree.insert(
+            spawn.pos,
+            Step {
+                parent: None,
+                piece: spawn,
+                instruction: None,
+                cost: 0,
+                depth: 0,
+            },
+        );
+
         // Conduct a Breadth-first search
         while let Some(step) = self.next.pop() {
             let piece = step.piece;
-            let parent = self.tree.get(&piece.pos).unwrap();
+            let parent = *self.tree.get(&piece.pos).unwrap();
             let dropped = state.sonic_drop(&piece);
             if let Some(dropped) = dropped {
-                self.check_write(state, parent, state.strafe(piece, -1), Instruction::Left);
-                self.check_write(state, parent, state.strafe(piece, 1), Instruction::Right);
+                self.check_write(state, &parent, state.strafe(piece, -1), Instruction::Left);
+                self.check_write(state, &parent, state.strafe(piece, 1), Instruction::Right);
 
                 if piece.pos.kind != PieceKind::O {
-                    self.check_write(state, parent, state.rotate(piece, true), Instruction::Cw);
-                    self.check_write(state, parent, state.rotate(piece, false), Instruction::Ccw);
+                    self.check_write(state, &parent, state.rotate(piece, true), Instruction::Cw);
+                    self.check_write(state, &parent, state.rotate(piece, false), Instruction::Ccw);
                 }
 
                 if dropped.pos.y != piece.pos.y {
-                    self.check_write(state, parent, Some(dropped), Instruction::SonicDrop);
+                    self.check_write(state, &parent, Some(dropped), Instruction::SonicDrop);
                 }
 
                 let placement = Placement(dropped.pos.cells(), dropped.spin);
@@ -125,9 +142,21 @@ impl MoveGenerator {
 
         if self.tree.get(&piece.pos) == None && step.depth < MAX_DEPTH {
             if piece.pos.kind == PieceKind::T || cost < MAX_NON_T_COST {
-                // Let's Continue BFS
+                // Continue BFS
                 self.tree.insert(piece.pos, step);
             }
         }
+    }
+
+    pub fn moves(&self) -> Vec<Move> {
+        let mut vec = self
+            .locked
+            .values()
+            .map(|(piece, _)| Move::Place(*piece))
+            .collect::<Vec<_>>();
+        if self.hold_only_move {
+            vec.push(Move::Hold);
+        }
+        vec
     }
 }
