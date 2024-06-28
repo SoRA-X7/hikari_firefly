@@ -1,8 +1,11 @@
+use search::BotSync;
+
 mod eval;
 mod graph;
 mod movegen;
 mod search;
 
 fn main() {
-    println!("Hello, world!");
+    let bot = BotSync::new();
+    bot.work_loop();
 }
