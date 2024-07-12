@@ -7,5 +7,10 @@ mod search;
 
 fn main() {
     let bot = BotSync::new();
-    bot.work_loop();
+    bot.init();
+    // bot.work_loop();
+    bot.search();
+    bot.search();
+    bot.search();
+    bot.search();
 }

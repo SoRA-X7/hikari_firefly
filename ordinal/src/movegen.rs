@@ -1,4 +1,7 @@
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, HashSet},
+};
 
 use game::tetris::*;
 
@@ -39,7 +42,7 @@ pub struct MoveGenerator {
     // BFS Tree for known step tracking and later path lookup
     tree: HashMap<PiecePosition, Step>,
     // Priority queue
-    next: BinaryHeap<Step>,
+    next: BinaryHeap<Reverse<Step>>,
     // Deduplicated lockable positions
     pub locked: HashMap<Placement, (PieceState, PiecePosition)>,
     hold_only_move: bool,
@@ -57,6 +60,7 @@ impl MoveGenerator {
         let mut state = state.clone();
 
         let spawn = state.spawn_next().ok_or(())?;
+        // println!("spawn {:?}", spawn);
         gen.generate_internal(&state, spawn);
 
         if use_hold {
@@ -76,20 +80,21 @@ impl MoveGenerator {
     }
 
     fn generate_internal<B: Board>(&mut self, state: &GameState<B>, spawn: PieceState) {
-        self.tree.insert(
-            spawn.pos,
-            Step {
-                parent: None,
-                piece: spawn,
-                instruction: None,
-                cost: 0,
-                depth: 0,
-            },
-        );
+        let root_step = Step {
+            parent: None,
+            piece: spawn,
+            instruction: None,
+            cost: 0,
+            depth: 0,
+        };
+
+        self.tree.insert(spawn.pos, root_step);
+        self.next.push(Reverse(root_step));
 
         // Conduct a Breadth-first search
         while let Some(step) = self.next.pop() {
-            let piece = step.piece;
+            // println!("take {:?}", &step.0.piece);
+            let piece = step.0.piece;
             let parent = *self.tree.get(&piece.pos).unwrap();
             let dropped = state.sonic_drop(&piece);
             if let Some(dropped) = dropped {
@@ -105,11 +110,14 @@ impl MoveGenerator {
                     self.check_write(state, &parent, Some(dropped), Instruction::SonicDrop);
                 }
 
-                let placement = Placement(dropped.pos.cells(), dropped.spin);
+                let mut cells = dropped.pos.cells();
+                cells.sort();
+                let placement = Placement(cells, dropped.spin);
 
                 self.locked.entry(placement).or_insert((dropped, piece.pos));
             }
         }
+        // println!("{}", self.locked.len());
     }
 
     fn check_write<B: Board>(
@@ -144,6 +152,7 @@ impl MoveGenerator {
             if piece.pos.kind == PieceKind::T || cost < MAX_NON_T_COST {
                 // Continue BFS
                 self.tree.insert(piece.pos, step);
+                self.next.push(Reverse(step));
             }
         }
     }

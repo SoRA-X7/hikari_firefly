@@ -227,7 +227,7 @@ pub trait Board: Clone {
         piece
             .cells()
             .iter()
-            .all(|(x, y)| *x < 0 || 10 <= *x || *y < 0 || 64 <= *y || self.occupied((*x, *y)))
+            .any(|(x, y)| *x < 0 || 10 <= *x || *y < 0 || 64 <= *y || self.occupied((*x, *y)))
     }
     fn is_empty(&self) -> bool;
     fn distance_to_ground(&self, pos: (i8, i8)) -> u32;
@@ -344,6 +344,10 @@ pub struct GameState<B: Board> {
 }
 
 impl<B: Board> GameState<B> {
+    pub fn fulfill_queue(&mut self) {
+        self.queue.push_back(self.bag.take_rand());
+    }
+
     pub fn spawn_next(&mut self) -> Option<PieceState> {
         let kind = self.queue.pop_front().unwrap();
         self.spawn(kind)
@@ -395,12 +399,18 @@ impl<B: Board> GameState<B> {
             }
         };
 
-        let from = piece.pos.kind.rotation_offsets(from);
-        let to = piece.pos.kind.rotation_offsets(to);
+        let from_offsets = piece.pos.kind.rotation_offsets(from);
+        let to_offsets = piece.pos.kind.rotation_offsets(to);
 
-        for (i, kick) in from.iter().zip(to).enumerate() {
+        for (i, kick) in from_offsets.iter().zip(to_offsets).enumerate() {
             let offset = (kick.0 .0 - kick.1 .0, kick.0 .1 - kick.1 .1);
-            let target = piece.pos.translate(offset);
+            let target = PiecePosition {
+                x: piece.pos.x + offset.0,
+                y: piece.pos.y + offset.1,
+                rot: to,
+                ..piece.pos
+            };
+            // println!("{:?} {:?} {:?}", piece.pos, clockwise, target);
             if !self.board.collides(target) {
                 let spin;
                 if piece.pos.kind != PieceKind::T {
@@ -485,7 +495,6 @@ impl<B: Board> GameState<B> {
                     self.hold = Some(_old);
                 }
                 debug_assert_eq!(current, piece.pos.kind);
-                let x = 14;
                 self.place_piece(piece)
             }
         }
