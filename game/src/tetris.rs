@@ -196,6 +196,10 @@ impl Default for PlacementResult {
 pub struct SevenBag(pub EnumSet<PieceKind>);
 
 impl SevenBag {
+    pub fn has(&self, piece: PieceKind) -> bool {
+        self.0.is_empty() || self.0.contains(piece)
+    }
+
     pub fn take(&mut self, piece: PieceKind) {
         if self.0.is_empty() {
             self.0 = EnumSet::all();
@@ -498,6 +502,12 @@ impl<B: Board> GameState<B> {
                 self.place_piece(piece)
             }
         }
+    }
+
+    pub fn add_piece(&mut self, piece: PieceKind) {
+        debug_assert!(self.bag.has(piece));
+        self.bag.take(piece);
+        self.queue.push_back(piece);
     }
 }
 

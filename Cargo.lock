@@ -153,9 +153,11 @@ name = "ordinal"
 version = "0.1.0"
 dependencies = [
  "dashmap",
+ "enumset",
  "game",
  "once_cell",
  "parking_lot",
+ "rand",
 ]
 
 [[package]]

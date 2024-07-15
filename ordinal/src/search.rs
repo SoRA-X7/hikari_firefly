@@ -24,9 +24,12 @@ impl Bot {
             b2b: false,
         };
 
-        for _ in 0..5 {
-            state.fulfill_queue();
-        }
+        state.add_piece(PieceKind::I);
+        state.add_piece(PieceKind::T);
+        state.add_piece(PieceKind::Z);
+        state.add_piece(PieceKind::J);
+        state.add_piece(PieceKind::S);
+
         println!("{:?}", state);
 
         self.graph = Some(Graph::new(state));

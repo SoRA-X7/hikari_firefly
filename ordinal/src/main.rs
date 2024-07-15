@@ -13,4 +13,8 @@ fn main() {
     bot.search();
     bot.search();
     bot.search();
+    bot.search();
+    bot.search();
+    bot.search();
+    bot.search();
 }
