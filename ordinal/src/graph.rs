@@ -40,6 +40,7 @@ pub struct Node {
 
 #[derive(Debug)]
 pub struct ChildrenData {
+    speculated: bool,
     candidates: EnumSet<PieceKind>,
     data: [Vec<Action>; 7],
 }
@@ -69,7 +70,7 @@ impl Graph {
             NodeSync::from(Node {
                 acc: 0.0,
                 field_eval: 0.0,
-                children: ChildrenData::new(),
+                children: ChildrenData::new(true),
                 parents: vec![],
                 visits: 0,
                 dead: false,
@@ -200,19 +201,20 @@ impl Node {
 }
 
 impl ChildrenData {
-    fn new() -> Self {
+    fn new(speculated: bool) -> Self {
         Self {
+            speculated,
             candidates: EnumSet::empty(),
             data: [vec![], vec![], vec![], vec![], vec![], vec![], vec![]],
         }
     }
 
     fn is_known(&self) -> bool {
-        self.candidates.len() == 1
+        !self.is_speculated()
     }
 
     fn is_speculated(&self) -> bool {
-        self.candidates.len() > 1
+        self.speculated == true
     }
 
     fn get_known(&self) -> &Vec<Action> {
@@ -260,6 +262,8 @@ impl NodeSync {
             (false, EnumSet::only(state.queue[0]))
         };
 
+        me.children.speculated = speculate;
+
         for piece in candidates.iter() {
             println!("gen");
             let mut state = state.clone();
@@ -292,7 +296,7 @@ impl NodeSync {
                     let _ = gen.next.write_node(&state, &self.0, || Node {
                         acc: 0.0,
                         field_eval: SimpleEvaluator::eval(&state),
-                        children: ChildrenData::new(),
+                        children: ChildrenData::new(true),
                         parents: vec![],
                         visits: 0,
                         dead: false,
