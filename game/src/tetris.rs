@@ -1,4 +1,7 @@
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    fmt::{self, Display},
+};
 
 use enumset::{EnumSet, EnumSetType};
 use rand::{thread_rng, Rng};
@@ -23,6 +26,12 @@ pub enum PieceKind {
     T,
     O,
     I,
+}
+
+impl fmt::Display for PieceKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl PieceKind {
@@ -132,6 +141,12 @@ impl PiecePosition {
         this.x += delta.0;
         this.y += delta.1;
         this
+    }
+}
+
+impl Display for PiecePosition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}@({},{})`{:?}", self.kind, self.x, self.y, self.rot)
     }
 }
 
@@ -505,6 +520,7 @@ impl<B: Board> GameState<B> {
     }
 
     pub fn add_piece(&mut self, piece: PieceKind) {
+        println!("{:?} / {:?}", self.bag.0, piece);
         debug_assert!(self.bag.has(piece));
         self.bag.take(piece);
         self.queue.push_back(piece);

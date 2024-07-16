@@ -9,12 +9,8 @@ fn main() {
     let bot = BotSync::new();
     bot.init();
     // bot.work_loop();
-    bot.search();
-    bot.search();
-    bot.search();
-    bot.search();
-    bot.search();
-    bot.search();
-    bot.search();
-    bot.search();
+    for _ in 0..1000 {
+        bot.search();
+        println!("{:?}", bot.stats());
+    }
 }

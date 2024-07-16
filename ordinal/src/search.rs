@@ -62,4 +62,15 @@ impl BotSync {
             self.search();
         }
     }
+
+    pub fn stats(&self) -> BotStats {
+        BotStats {
+            nodes: self.bot.read().graph.as_ref().unwrap().count_nodes(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BotStats {
+    pub nodes: Vec<usize>,
 }
