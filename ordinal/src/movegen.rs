@@ -98,8 +98,18 @@ impl MoveGenerator {
             let parent = *self.tree.get(&piece.pos).unwrap();
             let dropped = state.sonic_drop(&piece);
             if let Some(dropped) = dropped {
-                self.check_write(state, &parent, state.strafe(piece, -1), Instruction::Left);
-                self.check_write(state, &parent, state.strafe(piece, 1), Instruction::Right);
+                self.check_write(
+                    state,
+                    &parent,
+                    state.strafe(piece, (-1, 0)),
+                    Instruction::Left,
+                );
+                self.check_write(
+                    state,
+                    &parent,
+                    state.strafe(piece, (1, 0)),
+                    Instruction::Right,
+                );
 
                 if piece.pos.kind != PieceKind::O {
                     self.check_write(state, &parent, state.rotate(piece, true), Instruction::Cw);

@@ -193,6 +193,7 @@ pub struct PlacementResult {
     pub spin: SpinKind,
     pub is_b2b: bool,
     pub is_pc: bool,
+    pub death: bool,
 }
 
 impl Default for PlacementResult {
@@ -203,6 +204,7 @@ impl Default for PlacementResult {
             spin: SpinKind::None,
             is_b2b: false,
             is_pc: false,
+            death: false,
         }
     }
 }
@@ -240,7 +242,7 @@ impl Default for SevenBag {
     }
 }
 
-pub trait Board: Clone {
+pub trait Board: Clone + Default {
     fn occupied(&self, pos: (i8, i8)) -> bool;
     fn collides(&self, piece: PiecePosition) -> bool {
         piece
@@ -310,6 +312,14 @@ pub struct ColoredBoard {
     pub cols: [[CellKind; 64]; 10],
 }
 
+impl Default for ColoredBoard {
+    fn default() -> Self {
+        Self {
+            cols: [[CellKind::None; 64]; 10],
+        }
+    }
+}
+
 impl Board for ColoredBoard {
     fn occupied(&self, (x, y): (i8, i8)) -> bool {
         x < 0 || 10 <= x || y < 0 || 64 <= y || self.cols[x as usize][y as usize] != CellKind::None
@@ -352,7 +362,7 @@ impl Board for ColoredBoard {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GameState<B: Board> {
     pub board: B,
     pub hold: Option<PieceKind>,
@@ -390,9 +400,10 @@ impl<B: Board> GameState<B> {
         Some(p)
     }
 
-    pub fn strafe(&self, piece: PieceState, dx: i8) -> Option<PieceState> {
+    pub fn strafe(&self, piece: PieceState, (dx, dy): (i8, i8)) -> Option<PieceState> {
         let mut piece = piece;
         piece.pos.x += dx;
+        piece.pos.y += dy;
         if self.board.collides(piece.pos) {
             None
         } else {
@@ -481,7 +492,13 @@ impl<B: Board> GameState<B> {
         })
     }
 
+    pub fn is_grounded(&self, piece: &PieceState) -> bool {
+        self.sonic_drop(piece)
+            .map_or(false, |dropped| dropped.pos == piece.pos)
+    }
+
     pub fn place_piece(&mut self, piece: PieceState) -> PlacementResult {
+        let death = piece.pos.cells().iter().all(|(_, y)| *y >= 20);
         let lines_cleared = self.board.add_piece_and_clear(piece);
         let is_pc = self.board.is_empty();
         let is_b2b = lines_cleared == 4 || piece.spin != SpinKind::None;
@@ -496,6 +513,7 @@ impl<B: Board> GameState<B> {
             is_pc,
             ren: self.ren,
             spin: piece.spin,
+            death,
         }
     }
 
@@ -520,7 +538,7 @@ impl<B: Board> GameState<B> {
     }
 
     pub fn add_piece(&mut self, piece: PieceKind) {
-        println!("{:?} / {:?}", self.bag.0, piece);
+        // println!("{:?} / {:?}", self.bag.0, piece);
         debug_assert!(self.bag.has(piece));
         self.bag.take(piece);
         self.queue.push_back(piece);

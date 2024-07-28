@@ -30,7 +30,7 @@ impl Bot {
         state.add_piece(PieceKind::J);
         state.add_piece(PieceKind::S);
 
-        println!("{:?}", state);
+        // println!("{:?}", state);
 
         self.graph = Some(Graph::new(state));
     }

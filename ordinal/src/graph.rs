@@ -59,7 +59,7 @@ pub struct Action {
 
 impl Graph {
     pub fn new(state: GameState<BitBoard>) -> Self {
-        let state_index = StateIndex::new(&state, None);
+        let state_index = StateIndex::new(&state);
 
         let me = Self {
             root_gen: Lazy::new(|| Box::new(Generation::new())),
@@ -83,21 +83,16 @@ impl Graph {
     }
 
     pub fn search(&self) {
-        println!("start search");
         let mut gen = &**self.root_gen;
         let mut state = self.root_state.clone();
-        let mut speculation_piece = self.root_piece;
         let mut depth = 0;
         let mut moves = vec![];
-        while let Some(node) = gen.nodes.get(&StateIndex::new(&state, speculation_piece)) {
+        while let Some(node) = gen.nodes.get(&StateIndex::new(&state)) {
             // println!("ok");
             let reader = node.0.read();
             if let Some((speculation_resolve, act)) = reader.select_child() {
                 if let Some(resolved) = speculation_resolve {
                     state.add_piece(resolved);
-                    speculation_piece = Some(resolved);
-                } else {
-                    speculation_piece = Some(state.queue[0]);
                 }
                 moves.push(act.mv);
                 let result = state.advance(act.mv);
@@ -107,22 +102,21 @@ impl Graph {
                 // println!("len {}", gen.nodes.len());
                 continue;
             } else {
-                println!("expand {:?}", state);
-                println!(
-                    "search_ok depth: {}, moves: {:?}, children: {:?}",
-                    depth,
-                    moves
-                        .iter()
-                        .map(|mv| match mv {
-                            Move::Hold => "(hold)".to_string(),
-                            Move::Place(piece) => piece.pos.kind.to_string(),
-                        })
-                        .collect::<Vec<_>>(),
-                    reader.children
-                );
+                // println!("expand {:?}", state);
+                // println!(
+                //     "search_ok depth: {}, moves: {:?}, children: {:?}",
+                //     depth,
+                //     moves
+                //         .iter()
+                //         .map(|mv| match mv {
+                //             Move::Hold => "(hold)".to_string(),
+                //             Move::Place(piece) => piece.pos.kind.to_string(),
+                //         })
+                //         .collect::<Vec<_>>(),
+                //     reader.children
+                // );
                 drop(reader);
                 node.expand(&state, gen);
-                node.0.write().back_propagate();
                 return;
             }
         }
@@ -154,7 +148,6 @@ impl Generation {
 
     pub fn write_node(
         &self,
-        speculation_piece: PieceKind,
         state: &GameState<BitBoard>,
         parent: &Arc<RwLock<Node>>,
         node_fn: impl FnOnce() -> Node,
@@ -162,7 +155,7 @@ impl Generation {
         // println!("write {:?}", state);
         let node = self
             .nodes
-            .entry(StateIndex::new(state, Some(speculation_piece)))
+            .entry(StateIndex::new(state))
             .or_insert_with(|| node_fn().into());
         node.0.write().parents.push(Arc::downgrade(parent));
     }
@@ -315,11 +308,12 @@ impl NodeSync {
                 me.dead = true;
             }
         }
+
+        me.back_propagate();
     }
 
     fn generate_moves(&self, state: &GameState<BitBoard>, gen: &Generation) -> Option<Vec<Action>> {
         debug_assert!(!state.queue.is_empty());
-        let speculation_piece = state.queue[0];
         if let Ok(generator) = MoveGenerator::generate_for(state, false) {
             let children = generator
                 .moves()
@@ -331,16 +325,14 @@ impl NodeSync {
 
                     let reward = SimpleEvaluator::reward(&placement);
 
-                    let _ = gen
-                        .next
-                        .write_node(speculation_piece, &state, &self.0, || Node {
-                            acc: 0.0,
-                            field_eval: SimpleEvaluator::eval(&state),
-                            children: ChildrenData::new(true),
-                            parents: vec![],
-                            visits: 0,
-                            dead: false,
-                        });
+                    let _ = gen.next.write_node(&state, &self.0, || Node {
+                        acc: 0.0,
+                        field_eval: SimpleEvaluator::eval(&state),
+                        children: ChildrenData::new(true),
+                        parents: vec![],
+                        visits: 0,
+                        dead: false,
+                    });
 
                     Action {
                         mv,
@@ -361,15 +353,15 @@ impl NodeSync {
 struct StateIndex {
     board: BitBoard,
     hold: Option<PieceKind>,
-    speculation_piece: Option<PieceKind>,
+    speculation_pieces: EnumSet<PieceKind>,
 }
 
 impl StateIndex {
-    pub fn new(state: &GameState<BitBoard>, speculation_piece: Option<PieceKind>) -> Self {
+    pub fn new(state: &GameState<BitBoard>) -> Self {
         Self {
             board: state.board.clone(),
             hold: state.hold.clone(),
-            speculation_piece,
+            speculation_pieces: state.bag.0,
         }
     }
 }
