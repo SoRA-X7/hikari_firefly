@@ -1,15 +1,14 @@
-use std::{
-    hash::{DefaultHasher, Hash},
-    ops::DerefMut,
-    sync::{atomic::AtomicU32, Arc, Weak},
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc, Weak,
 };
 
 use dashmap::DashMap;
 use enumset::EnumSet;
 use game::tetris::*;
 use once_cell::sync::Lazy;
-use parking_lot::RwLock;
-use rand::{seq::SliceRandom, thread_rng, Rng};
+use parking_lot::Mutex;
+use rand::{seq::SliceRandom, thread_rng};
 
 use crate::{
     eval::{Evaluator, SimpleEvaluator},
@@ -19,7 +18,6 @@ use crate::{
 pub struct Graph {
     root_gen: Lazy<Box<Generation>>,
     root_state: GameState<BitBoard>,
-    root_piece: Option<PieceKind>,
 }
 
 pub struct Generation {
@@ -34,7 +32,7 @@ pub struct Node {
     acc: Eval,
     field_eval: Eval,
     children: ChildrenData,
-    parents: Vec<Weak<RwLock<Node>>>,
+    parents: Vec<Weak<Mutex<Node>>>,
     visits: u32,
     dead: bool,
 }
@@ -47,7 +45,7 @@ pub struct ChildrenData {
 }
 
 #[derive(Clone, Debug)]
-pub struct NodeSync(Arc<RwLock<Node>>);
+pub struct NodeSync(Arc<Mutex<Node>>);
 
 #[derive(Debug)]
 pub struct Action {
@@ -64,7 +62,6 @@ impl Graph {
         let me = Self {
             root_gen: Lazy::new(|| Box::new(Generation::new())),
             root_state: state,
-            root_piece: None,
         };
 
         me.root_gen.nodes.insert(
@@ -88,15 +85,17 @@ impl Graph {
         let mut depth = 0;
         let mut moves = vec![];
         while let Some(node) = gen.nodes.get(&StateIndex::new(&state)) {
-            // println!("ok");
-            let reader = node.0.read();
-            if let Some((speculation_resolve, act)) = reader.select_child() {
+            let selfref = Arc::downgrade(&node.0);
+            let mut node = node.0.lock();
+            // println!("{} {} {:?}", depth, node.visits, node.children.data);
+            if let Some((speculation_resolve, act)) = node.select_child() {
                 if let Some(resolved) = speculation_resolve {
                     state.add_piece(resolved);
                 }
                 moves.push(act.mv);
                 let result = state.advance(act.mv);
-                // println!("advance {:?}", state);
+                act.visits.fetch_add(1, Ordering::Relaxed);
+                node.visits += 1;
                 depth += 1;
                 gen = &**gen.next;
                 // println!("len {}", gen.nodes.len());
@@ -115,8 +114,7 @@ impl Graph {
                 //         .collect::<Vec<_>>(),
                 //     reader.children
                 // );
-                drop(reader);
-                node.expand(&state, gen);
+                node.expand(&selfref, &state, gen);
                 return;
             }
         }
@@ -149,7 +147,7 @@ impl Generation {
     pub fn write_node(
         &self,
         state: &GameState<BitBoard>,
-        parent: &Arc<RwLock<Node>>,
+        parent: Weak<Mutex<Node>>,
         node_fn: impl FnOnce() -> Node,
     ) {
         // println!("write {:?}", state);
@@ -157,7 +155,7 @@ impl Generation {
             .nodes
             .entry(StateIndex::new(state))
             .or_insert_with(|| node_fn().into());
-        node.0.write().parents.push(Arc::downgrade(parent));
+        node.0.lock().parents.push(parent);
     }
 }
 
@@ -188,10 +186,7 @@ impl Node {
         const C: f32 = 1.4;
         let visits_sum_log = (self.visits as f32).ln();
         let selection = children.iter().max_by_key(|&a| {
-            let v = a.acc
-                + C * f32::sqrt(
-                    visits_sum_log / a.visits.load(std::sync::atomic::Ordering::Relaxed) as f32,
-                );
+            let v = a.acc + C * f32::sqrt(visits_sum_log / a.visits.load(Ordering::Relaxed) as f32);
             (v * 10000.0) as u32
         });
         // println!("resolve {:?} {:?}", selection, speculation_resolve);
@@ -214,7 +209,7 @@ impl Node {
 
         for parent in &self.parents {
             if let Some(parent) = parent.upgrade() {
-                parent.write().back_propagate();
+                parent.lock().back_propagate();
             }
         }
     }
@@ -224,6 +219,86 @@ impl Node {
         let acc = children[0].acc + field_eval;
 
         acc
+    }
+
+    pub fn expand(
+        &mut self,
+        selfref: &Weak<Mutex<Node>>,
+        state: &GameState<BitBoard>,
+        gen: &Generation,
+    ) {
+        if !self.children.is_empty() {
+            return;
+        }
+
+        let (speculate, candidates) = if state.queue.is_empty() {
+            let mut cand = state.bag.0.clone();
+            if cand.is_empty() {
+                cand = EnumSet::all();
+            }
+            (true, cand)
+        } else {
+            (false, EnumSet::only(state.queue[0]))
+        };
+
+        self.children.speculated = speculate;
+
+        for piece in candidates.iter() {
+            let mut state = state.clone();
+            if speculate {
+                state.bag.take(piece);
+                state.queue.push_back(piece);
+            }
+            let moves = self.generate_moves(selfref, &state, gen);
+            if let Some(moves) = moves {
+                self.children.set(piece, moves);
+            } else {
+                self.dead = true;
+            }
+        }
+
+        self.back_propagate();
+    }
+
+    fn generate_moves(
+        &self,
+        selfref: &Weak<Mutex<Node>>,
+        state: &GameState<BitBoard>,
+        gen: &Generation,
+    ) -> Option<Vec<Action>> {
+        debug_assert!(!state.queue.is_empty());
+        if let Ok(generator) = MoveGenerator::generate_for(state, false) {
+            let children = generator
+                .moves()
+                .iter()
+                .map(|&mv| {
+                    let mut state = state.clone();
+
+                    let placement = state.advance(mv);
+
+                    let reward = SimpleEvaluator::reward(&placement);
+
+                    let _ = gen.next.write_node(&state, selfref.clone(), || Node {
+                        acc: 0.0,
+                        field_eval: SimpleEvaluator::eval(&state),
+                        children: ChildrenData::new(true),
+                        parents: vec![],
+                        visits: 0,
+                        dead: false,
+                    });
+
+                    Action {
+                        mv,
+                        reward,
+                        acc: reward,
+                        visits: AtomicU32::new(1),
+                    }
+                })
+                .collect::<Vec<_>>();
+            Some(children)
+        } else {
+            None
+        }
     }
 }
 
@@ -272,80 +347,7 @@ impl ChildrenData {
 
 impl From<Node> for NodeSync {
     fn from(value: Node) -> Self {
-        Self(Arc::new(RwLock::new(value)))
-    }
-}
-
-impl NodeSync {
-    pub fn expand(&self, state: &GameState<BitBoard>, gen: &Generation) {
-        let mut me = self.0.write();
-        if !me.children.is_empty() {
-            return;
-        }
-
-        let (speculate, candidates) = if state.queue.is_empty() {
-            let mut cand = state.bag.0.clone();
-            if cand.is_empty() {
-                cand = EnumSet::all();
-            }
-            (true, cand)
-        } else {
-            (false, EnumSet::only(state.queue[0]))
-        };
-
-        me.children.speculated = speculate;
-
-        for piece in candidates.iter() {
-            let mut state = state.clone();
-            if speculate {
-                state.bag.take(piece);
-                state.queue.push_back(piece);
-            }
-            let moves = self.generate_moves(&state, gen);
-            if let Some(moves) = moves {
-                me.children.set(piece, moves);
-            } else {
-                me.dead = true;
-            }
-        }
-
-        me.back_propagate();
-    }
-
-    fn generate_moves(&self, state: &GameState<BitBoard>, gen: &Generation) -> Option<Vec<Action>> {
-        debug_assert!(!state.queue.is_empty());
-        if let Ok(generator) = MoveGenerator::generate_for(state, false) {
-            let children = generator
-                .moves()
-                .iter()
-                .map(|&mv| {
-                    let mut state = state.clone();
-
-                    let placement = state.advance(mv);
-
-                    let reward = SimpleEvaluator::reward(&placement);
-
-                    let _ = gen.next.write_node(&state, &self.0, || Node {
-                        acc: 0.0,
-                        field_eval: SimpleEvaluator::eval(&state),
-                        children: ChildrenData::new(true),
-                        parents: vec![],
-                        visits: 0,
-                        dead: false,
-                    });
-
-                    Action {
-                        mv,
-                        reward,
-                        acc: reward,
-                        visits: AtomicU32::new(1),
-                    }
-                })
-                .collect::<Vec<_>>();
-            Some(children)
-        } else {
-            None
-        }
+        Self(Arc::new(Mutex::new(value)))
     }
 }
 

@@ -2,6 +2,7 @@
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 
 use eframe::egui;
+use game::tetris::{ColoredBoard, GameState};
 use render::render_tetris;
 
 mod render;
@@ -27,6 +28,7 @@ fn main() -> eframe::Result {
 struct MyApp {
     name: String,
     age: u32,
+    state: GameState<ColoredBoard>,
 }
 
 impl Default for MyApp {
@@ -34,6 +36,7 @@ impl Default for MyApp {
         Self {
             name: "Arthur".to_owned(),
             age: 42,
+            state: GameState::default(),
         }
     }
 }
@@ -52,7 +55,7 @@ impl eframe::App for MyApp {
                 self.age += 1;
             }
             ui.horizontal(|ui| {
-                render_tetris(ui);
+                render_tetris(ui, &self.state);
             })
         });
     }

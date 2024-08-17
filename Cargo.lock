@@ -1342,6 +1342,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "env_logger",
+ "game",
 ]
 
 [[package]]

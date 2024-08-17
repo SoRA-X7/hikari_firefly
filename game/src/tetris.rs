@@ -331,8 +331,13 @@ impl Board for ColoredBoard {
             .all(|col| col.iter().all(|cell| *cell == CellKind::None))
     }
 
-    fn distance_to_ground(&self, pos: (i8, i8)) -> u32 {
-        unimplemented!()
+    fn distance_to_ground(&self, (x, y): (i8, i8)) -> u32 {
+        self.cols[x as usize]
+            .iter()
+            .rev()
+            .skip((u64::BITS - (y as u32)) as usize)
+            .take_while(|&c| *c == CellKind::None)
+            .count() as u32
     }
 
     fn add_piece_and_clear(&mut self, piece: PieceState) -> u32 {

@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, ops::Deref, sync::Arc};
 
 use game::tetris::*;
 use parking_lot::RwLock;
@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use crate::graph::Graph;
 
 pub struct Bot {
-    graph: Option<Graph>,
+    pub graph: Option<Graph>,
 }
 
 impl Bot {
@@ -67,6 +67,10 @@ impl BotSync {
         BotStats {
             nodes: self.bot.read().graph.as_ref().unwrap().count_nodes(),
         }
+    }
+
+    pub fn get(&self) -> impl Deref<Target = Bot> + '_ {
+        self.bot.read()
     }
 }
 
