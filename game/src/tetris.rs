@@ -7,7 +7,7 @@ use enumset::{EnumSet, EnumSetType};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Instruction {
     None,
     Left,
@@ -364,6 +364,28 @@ impl Board for ColoredBoard {
             offset += 1;
         }
         cleared.len() as u32
+    }
+}
+
+impl From<Vec<[Option<char>; 10]>> for ColoredBoard {
+    fn from(v: Vec<[Option<char>; 10]>) -> Self {
+        let mut cols = [[CellKind::None; u64::BITS as usize]; 10];
+        for x in 0..10 {
+            for y in 0..40 {
+                cols[x][y] = v[y][x].map_or(CellKind::None, |c| match c {
+                    'S' => CellKind::S,
+                    'Z' => CellKind::Z,
+                    'J' => CellKind::J,
+                    'L' => CellKind::L,
+                    'T' => CellKind::T,
+                    'O' => CellKind::O,
+                    'I' => CellKind::I,
+                    'G' => CellKind::Gbg,
+                    _ => CellKind::None,
+                });
+            }
+        }
+        ColoredBoard { cols }
     }
 }
 

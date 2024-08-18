@@ -1,7 +1,3 @@
 [workspace]
 
-members = [
-    "game",
-    "ordinal",
-    "frontend"
-]
+members = ["game", "ordinal", "frontend", "firefly"]

@@ -1,9 +1,13 @@
-use std::{collections::VecDeque, ops::Deref, sync::Arc};
+use std::{collections::VecDeque, convert::Infallible, ops::Deref, sync::Arc};
 
+use futures::prelude::*;
 use game::tetris::*;
 use parking_lot::RwLock;
 
-use crate::graph::Graph;
+use crate::{
+    graph::Graph,
+    tbp::{BotMessage, FrontendMessage},
+};
 
 pub struct Bot {
     pub graph: Option<Graph>,
@@ -33,6 +37,12 @@ impl Bot {
         // println!("{:?}", state);
 
         self.graph = Some(Graph::new(state));
+    }
+
+    pub fn add_piece(&mut self, piece: PieceKind) {
+        if let Some(graph) = &mut self.graph {
+            graph.add_piece(piece);
+        }
     }
 }
 
@@ -72,9 +82,38 @@ impl BotSync {
     pub fn get(&self) -> impl Deref<Target = Bot> + '_ {
         self.bot.read()
     }
+
+    fn add_piece(&self, piece: PieceKind) {
+        if let Some(graph) = &mut self.bot.write().graph {
+            graph.add_piece(piece);
+        }
+    }
+
+    fn stop(&self) {}
 }
 
 #[derive(Debug)]
 pub struct BotStats {
     pub nodes: Vec<usize>,
+}
+
+pub async fn bot_run(
+    mut incoming: impl Stream<Item = FrontendMessage> + Unpin,
+    mut outgoing: impl Sink<BotMessage, Error = Infallible> + Unpin,
+) {
+    let bot = BotSync::new();
+    bot.init();
+
+    while let Some(msg) = incoming.next().await {
+        match msg {
+            FrontendMessage::Rules => outgoing.send(BotMessage::Ready).await.unwrap(),
+            FrontendMessage::Start(start) => {}
+            FrontendMessage::Play { mv } => todo!(),
+            FrontendMessage::NewPiece { piece } => bot.add_piece(piece),
+            FrontendMessage::Suggest => todo!(),
+            FrontendMessage::Stop => bot.stop(),
+            FrontendMessage::Quit => break,
+            FrontendMessage::Unknown => {}
+        }
+    }
 }

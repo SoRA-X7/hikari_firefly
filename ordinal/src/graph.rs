@@ -134,6 +134,10 @@ impl Graph {
         }
         count
     }
+
+    pub fn add_piece(&mut self, piece: PieceKind) {
+        self.root_state.add_piece(piece);
+    }
 }
 
 impl Generation {
