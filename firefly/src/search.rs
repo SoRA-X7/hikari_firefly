@@ -1,16 +1,19 @@
 use rand::Rng;
-use serde::de;
-use std::ops::DerefMut;
 
 use dashmap::{mapref::one::RefMut, DashMap};
 use game::tetris::*;
-use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
 
-use crate::movegen::MoveGenerator;
+use crate::{
+    mem::{HerdPool, RentedHerd},
+    movegen::MoveGenerator,
+};
 
-pub struct Generation {
-    nodes: DashMap<State, Node>,
-    next: Lazy<Box<Generation>>,
+pub struct Generation<'h> {
+    herd_pool: HerdPool,
+    herd: RentedHerd<'h>,
+    deduper: DashMap<State, &'h Node>,
+    next: OnceCell<Box<Generation<'h>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,11 +74,14 @@ impl From<GameState<BitBoard>> for State {
     }
 }
 
-impl Generation {
-    pub fn new() -> Self {
+impl<'hp> Generation<'hp> {
+    pub fn new(herd_pool: &HerdPool) -> Self {
+        let herd_pool = herd_pool.clone();
         Self {
-            nodes: DashMap::new(),
-            next: Lazy::new(|| Box::new(Generation::new())),
+            herd_pool,
+            herd: herd_pool.rent(),
+            deduper: DashMap::new(),
+            next: OnceCell::new(),
         }
     }
 

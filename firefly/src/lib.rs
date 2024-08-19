@@ -1,3 +1,4 @@
+mod mem;
 mod movegen;
 mod search;
 
