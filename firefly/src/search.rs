@@ -1,6 +1,16 @@
+use std::cell::Cell;
+
+use bumpalo_herd::Herd;
+use ouroboros::self_referencing;
 use rand::Rng;
 
-use dashmap::{mapref::one::RefMut, DashMap};
+use dashmap::{
+    mapref::{
+        entry::{self, Entry},
+        one::RefMut,
+    },
+    DashMap,
+};
 use game::tetris::*;
 use once_cell::sync::OnceCell;
 
@@ -9,11 +19,27 @@ use crate::{
     movegen::MoveGenerator,
 };
 
-pub struct Generation<'h> {
-    herd_pool: HerdPool,
-    herd: RentedHerd<'h>,
-    deduper: DashMap<State, &'h Node>,
-    next: OnceCell<Box<Generation<'h>>>,
+pub struct Graph {
+    root_gen: Box<Generation>,
+    root_state: GameState<BitBoard>,
+}
+
+impl Graph {
+    pub fn search_work(&self) {
+        let mut gen = self.root_gen;
+        let mut state = self.root_state.clone();
+        let mut use_hold = true;
+        loop {}
+    }
+}
+
+#[self_referencing]
+pub struct Generation {
+    herd: Herd,
+    #[borrows(herd)]
+    #[not_covariant]
+    deduper: DashMap<State, &'this Node>,
+    next: OnceCell<Box<Generation>>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,20 +100,27 @@ impl From<GameState<BitBoard>> for State {
     }
 }
 
-impl<'hp> Generation<'hp> {
-    pub fn new(herd_pool: &HerdPool) -> Self {
-        let herd_pool = herd_pool.clone();
-        Self {
-            herd_pool,
-            herd: herd_pool.rent(),
-            deduper: DashMap::new(),
+impl Generation {
+    pub fn build() -> Self {
+        GenerationBuilder {
+            herd: Herd::default(),
+            deduper_builder: |herd| DashMap::new(),
             next: OnceCell::new(),
         }
+        .build()
     }
 
-    pub fn upsert_node(&self, state: State) -> RefMut<State, Node> {
-        self.nodes.entry(state).or_insert_with(|| Node::new())
-    }
+    pub fn 
+
+    // pub fn node<'a>(&'a self, state: State, make: impl FnOnce() -> Node) -> &'a Node {
+    //     self.with(|this| {
+    //         let bump: bumpalo_herd::Member<'a> = this.herd.get();
+    //         this.deduper
+    //             .entry(state)
+    //             .or_insert_with(move || bump.alloc(make()))
+    //             .value_mut()
+    //     })
+    // }
 }
 
 impl Node {

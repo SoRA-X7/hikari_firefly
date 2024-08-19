@@ -1,39 +1,28 @@
-use std::{
-    borrow::Borrow,
-    mem::ManuallyDrop,
-    sync::{Arc, Weak},
-};
+use std::{borrow::Borrow, mem::ManuallyDrop};
 
 use bumpalo_herd::Herd;
 use parking_lot::Mutex;
 
 /// A object pool to reuse Herds through generations
-#[derive(Clone)]
-pub struct HerdPool(Arc<HerdPoolInner>);
-
-pub struct HerdPoolInner {
-    arena: Mutex<Vec<Herd>>,
-}
+pub struct HerdPool(Mutex<Vec<Herd>>);
 
 pub struct RentedHerd<'hp> {
     herd: ManuallyDrop<Herd>,
-    owner: &'hp HerdPoolInner,
+    owner: &'hp HerdPool,
 }
 
 impl HerdPool {
     pub fn new() -> Self {
-        Self(Arc::new(HerdPoolInner {
-            arena: Mutex::new(Vec::new()),
-        }))
+        Self(Mutex::new(Vec::new()))
     }
 
     /// Rent a herd from the pool. If the pool is empty, a new herd will be created.
     pub fn rent(&self) -> RentedHerd {
-        let mut arena = self.0.arena.lock();
+        let mut arena = self.0.lock();
         let herd = arena.pop().unwrap_or_default();
         RentedHerd {
             herd: ManuallyDrop::new(herd),
-            owner: &self.0,
+            owner: &self,
         }
     }
 }
@@ -52,6 +41,6 @@ impl Drop for RentedHerd<'_> {
         // Safety: the herd will be dropped by the pool
         let member = unsafe { ManuallyDrop::take(&mut self.herd) };
 
-        self.owner.arena.lock().push(member);
+        self.owner.0.lock().push(member);
     }
 }
