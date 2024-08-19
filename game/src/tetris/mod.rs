@@ -4,8 +4,11 @@ use std::{
 };
 
 use enumset::{EnumSet, EnumSetType};
+use movegen::MoveGenerator;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
+
+mod movegen;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Instruction {
@@ -569,6 +572,11 @@ impl<B: Board> GameState<B> {
         debug_assert!(self.bag.has(piece));
         self.bag.take(piece);
         self.queue.push_back(piece);
+    }
+
+    pub fn legal_moves(&self, use_hold: bool) -> Result<Vec<Move>, ()> {
+        let gen = MoveGenerator::generate_for(self, use_hold)?;
+        Ok(gen.moves())
     }
 }
 

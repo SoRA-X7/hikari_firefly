@@ -1,36 +1,11 @@
-use std::cell::Cell;
-
 use bumpalo_herd::Herd;
+use dashmap::DashMap;
+use game::tetris::{BitBoard, GameState, Move, SevenBag};
 use ouroboros::self_referencing;
-use rand::Rng;
-
-use dashmap::{
-    mapref::{
-        entry::{self, Entry},
-        one::RefMut,
-    },
-    DashMap,
-};
-use game::tetris::*;
-use once_cell::sync::OnceCell;
-
-use crate::{
-    mem::{HerdPool, RentedHerd},
-    movegen::MoveGenerator,
-};
 
 pub struct Graph {
-    root_gen: Box<Generation>,
+    root_gen: Generation,
     root_state: GameState<BitBoard>,
-}
-
-impl Graph {
-    pub fn search_work(&self) {
-        let mut gen = self.root_gen;
-        let mut state = self.root_state.clone();
-        let mut use_hold = true;
-        loop {}
-    }
 }
 
 #[self_referencing]
@@ -38,57 +13,88 @@ pub struct Generation {
     herd: Herd,
     #[borrows(herd)]
     #[not_covariant]
-    deduper: DashMap<State, &'this Node>,
-    next: OnceCell<Box<Generation>>,
+    deduper: DashMap<State, &'this Node<'this>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Children {
-    pub data: Vec<Action>,
+pub struct Node<'bump> {
+    children: Option<ChildData<'bump>>,
+    value: f64,
+    acc: f64,
 }
 
-impl Children {
-    pub fn build_with(
-        moves: Vec<Move>,
-        next_gen: &Generation,
-        state: &GameState<BitBoard>,
-    ) -> Self {
-        let mut actions = Vec::new();
-        for (index, &mv) in moves.iter().enumerate() {
-            let mut state = state.clone();
-            state.advance(mv);
-            let node = next_gen.upsert_node(state.into()).index();
-            let reward = 0.0;
-            actions.push(Action {
-                mv,
-                node,
-                reward,
-                visits: 0,
-            });
+pub struct ChildData<'bump>(&'bump [Action]);
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Action {
+    mv: Move,
+    reward: f64,
+    visits: u32,
+}
+
+impl Graph {
+    pub fn new(state: GameState<BitBoard>) -> Self {
+        Self {
+            root_gen: GenerationBuilder {
+                herd: Herd::new(),
+                deduper_builder: |_| DashMap::new(),
+            }
+            .build(),
+            root_state: state,
         }
-        Children { data: actions }
+    }
+
+    pub fn work(&self) {
+        let mut gen = &self.root_gen;
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Action {
-    pub mv: Move,
-    pub node: usize,
-    pub reward: f64,
-    pub visits: u32,
+impl Generation {
+    pub fn get_node(&self, state: &GameState<BitBoard>) -> &Node {
+        self.with_deduper(|d| *d.get(&state.clone().into()).unwrap())
+    }
+
+    pub fn select(&self, state: &GameState<BitBoard>) -> Action {
+        self.get_node(state).select_child()
+    }
+
+    pub fn expand(&self, state: &GameState<BitBoard>) {
+        self.with(|this| {
+            let node = this.deduper.get(&state.clone().into()).unwrap();
+            let mut children = Vec::new();
+            for mv in state.legal_moves(true).unwrap() {
+                children.push(Action {
+                    mv,
+                    reward: 0.0,
+                    visits: 0,
+                });
+            }
+            ChildData(this.herd.get().alloc_slice_copy(&children))
+        });
+    }
 }
 
-#[derive(Debug, Clone)]
-pub struct Node {
-    pub children: Option<Children>,
-    pub visits: u32,
-    pub value: f64,
+impl Node<'_> {
+    pub fn select_child(&self) -> Action {
+        debug_assert!(self.children.is_some());
+        let children = self.children.as_ref().unwrap();
+        let total_visits = self.acc;
+        let mut best = None;
+        let mut best_score = f64::NEG_INFINITY;
+        for action in children.0 {
+            let score = action.reward + (1.0 / (action.visits as f64).sqrt());
+            if score > best_score {
+                best = Some(action);
+                best_score = score;
+            }
+        }
+        (*best.unwrap()).clone()
+    }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct State {
-    pub board: BitBoard,
-    pub bag: SevenBag,
+    board: BitBoard,
+    bag: SevenBag,
 }
 
 impl From<GameState<BitBoard>> for State {
@@ -96,79 +102,6 @@ impl From<GameState<BitBoard>> for State {
         Self {
             board: state.board,
             bag: state.bag,
-        }
-    }
-}
-
-impl Generation {
-    pub fn build() -> Self {
-        GenerationBuilder {
-            herd: Herd::default(),
-            deduper_builder: |herd| DashMap::new(),
-            next: OnceCell::new(),
-        }
-        .build()
-    }
-
-    pub fn 
-
-    // pub fn node<'a>(&'a self, state: State, make: impl FnOnce() -> Node) -> &'a Node {
-    //     self.with(|this| {
-    //         let bump: bumpalo_herd::Member<'a> = this.herd.get();
-    //         this.deduper
-    //             .entry(state)
-    //             .or_insert_with(move || bump.alloc(make()))
-    //             .value_mut()
-    //     })
-    // }
-}
-
-impl Node {
-    pub fn new() -> Self {
-        Self {
-            children: None,
-            visits: 0,
-            value: 0.0,
-        }
-    }
-
-    pub fn select(&mut self) -> Option<&mut Action> {
-        debug_assert!(self.children.is_some());
-        let children = self.children.as_mut().unwrap();
-
-        let total_visits: u32 = children.data.iter().map(|action| action.visits).sum();
-        let mut rng = rand::thread_rng();
-        let mut weighted_actions: Vec<(f64, &mut Action)> = children
-            .data
-            .iter_mut()
-            .map(|action| {
-                let weight = action.visits as f64 / total_visits as f64;
-                (weight, action)
-            })
-            .collect();
-        weighted_actions.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-        let random_value: f64 = rng.gen();
-        let mut cumulative_weight = 0.0;
-        for (weight, action) in weighted_actions {
-            cumulative_weight += weight;
-            if cumulative_weight >= random_value {
-                action.visits += 1;
-                return Some(action);
-            }
-        }
-        None
-    }
-
-    pub fn expand(&mut self, state: &GameState<BitBoard>, use_hold: bool, next_gen: &Generation) {
-        debug_assert!(self.children.is_none());
-
-        let move_gen = MoveGenerator::generate_for(state, use_hold);
-        if let Ok(move_gen) = move_gen {
-            let moves = move_gen.moves();
-
-            let children = Children::build_with(moves, next_gen, state);
-
-            self.children = Some(children);
         }
     }
 }

@@ -1,9 +1,8 @@
+use super::*;
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{BinaryHeap, HashMap},
 };
-
-use game::tetris::*;
 
 const MAX_DEPTH: u8 = 32;
 const MAX_NON_T_COST: u8 = 20;
