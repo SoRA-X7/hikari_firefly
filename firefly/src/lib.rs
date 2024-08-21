@@ -20,10 +20,15 @@ impl HikariFireflyBot {
     }
 
     pub fn start(&self) {
-        let state = GameState::default(); // todo: reset
+        let mut state = GameState::default();
+        for _ in 0..12 {
+            state.fulfill_queue();
+        }
+        println!("Initial state: {:?}", state);
+
         self.graph.write().replace(Graph::new(&state));
 
-        for _ in 0..4 {
+        for _ in 0..2 {
             let worker = Worker::new(self);
             rayon::spawn(move || {
                 worker.work_loop();

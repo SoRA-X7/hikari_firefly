@@ -1,9 +1,8 @@
-use std::cmp::Reverse;
-
 use dashmap::DashMap;
-use game::tetris::{BitBoard, GameState, Move, SevenBag};
+use game::tetris::{BitBoard, GameState, Move, PieceKind, SevenBag};
 use once_cell::sync::Lazy;
-use smallvec::SmallVec;
+use rand::{distributions::WeightedIndex, prelude::*};
+use smallvec::{smallvec, SmallVec};
 
 use crate::storage::{Index, IndexRange, Rack};
 
@@ -15,7 +14,6 @@ pub struct Graph {
 pub struct Generation {
     nodes_rack: Rack<Node>,
     actions_rack: Rack<Action>,
-    parents_lookup: DashMap<State, SmallVec<[Index; 1]>>, // TODO: handle transpositions better
     lookup: DashMap<State, Index>,
     next: Lazy<Box<Generation>>,
 }
@@ -23,6 +21,7 @@ pub struct Generation {
 #[derive(Debug, Clone)]
 pub struct Node {
     children: Option<ChildData>,
+    parents: SmallVec<[Index; 3]>,
     value: f64,
     // acc: f64,
 }
@@ -43,6 +42,16 @@ impl Graph {
     pub fn new(state: &GameState<BitBoard>) -> Self {
         let root_gen = Box::new(Generation::new());
         let root_state = state.clone();
+        // init first node
+        let root_node = Node {
+            children: None,
+            parents: smallvec![],
+            value: 0.0,
+            // acc: 0.0,
+        };
+        let root_node = root_gen.nodes_rack.alloc(root_node);
+        root_gen.lookup.insert(state.clone().into(), root_node);
+
         Self {
             root_gen,
             root_state,
@@ -53,21 +62,28 @@ impl Graph {
         let mut gen = &*self.root_gen;
         let mut state = self.root_state.clone();
         let mut gen_history = vec![gen];
+        let mut _action_history = vec![];
 
         loop {
             // Dig down tree until we reach a leaf
             match gen.select(&state) {
                 SelectResult::Ok(action) => {
+                    _action_history.push(action);
                     state.advance(action.mv);
                     gen = &*gen.next;
                     gen_history.push(gen);
                 }
                 SelectResult::Expand => {
+                    if state.queue.is_empty() {
+                        // TODO: evaluate
+                        return;
+                    }
                     gen.expand(&state);
                     Self::backprop(gen_history, &state);
                     break;
                 }
                 SelectResult::Failed => {
+                    println!("Failed");
                     return;
                 }
             }
@@ -98,12 +114,8 @@ impl Graph {
                     // node.acc = best.acc;
 
                     // Enqueue parents of the current node
-                    let parents = current_gen
-                        .parents_lookup
-                        .get(&state.clone().into())
-                        .unwrap();
                     // TODO: find a better way to lock parents
-                    next_to_update.extend(parents.iter());
+                    next_to_update.extend(node.parents.iter());
                 });
             }
             to_update = next_to_update;
@@ -120,7 +132,6 @@ impl Generation {
             actions_rack: Rack::new(1 << 12),
             lookup: DashMap::new(),
             next: Lazy::new(|| Box::new(Self::new())),
-            parents_lookup: DashMap::new(),
         }
     }
 
@@ -139,22 +150,26 @@ impl Generation {
     pub fn select(&self, state: &GameState<BitBoard>) -> SelectResult {
         if let Some(index) = self.find_node_index(state) {
             self.with_node(index, |node| {
+                println!("{:?}", rayon::current_thread_index());
                 if node.children.is_none() {
                     return SelectResult::Expand;
                 }
 
                 let children = node.children.as_ref().unwrap();
                 let selection = self.with_actions(children.0, |actions| {
-                    let mut best = None;
-                    let mut best_score = f64::NEG_INFINITY;
-                    for action in actions {
-                        let score = action.reward + (1.0 / (action.visits as f64).sqrt());
-                        if score > best_score {
-                            best = Some(action);
-                            best_score = score;
-                        }
-                    }
-                    Some((*best?).clone())
+                    let min = actions
+                        .iter()
+                        .map(|action| action.acc)
+                        .fold(f64::INFINITY, f64::min);
+                    let weights: Vec<f64> = actions
+                        .iter()
+                        .map(|action| action.acc + min + 1.0)
+                        .collect();
+                    let dist = WeightedIndex::new(&weights).unwrap();
+                    let mut rng = thread_rng();
+                    let index = dist.sample(&mut rng);
+                    let action = actions[index].clone();
+                    Some(action)
                 });
 
                 match selection {
@@ -176,24 +191,34 @@ impl Generation {
         let next_lookup = &self.next.lookup;
 
         self.with_node(index, |node| {
-            let actions = state
-                .legal_moves(true)
-                .unwrap()
+            let moves = state.legal_moves(true).unwrap();
+            let actions = moves
                 .iter()
                 .map(|&mv| {
                     let mut state = state.clone();
                     let _ = state.advance(mv);
                     // TODO: evaluation
 
-                    let node_index = next_lookup.entry(state.into()).or_insert_with(|| {
-                        let node = Node {
-                            children: None,
-                            value: 0.0,
-                            // acc: 0.0,
-                        };
-                        let index = next_nodes_shelf.append(node);
-                        index
-                    });
+                    let node_index = next_lookup
+                        .entry(state.into())
+                        .and_modify(|e| {
+                            if next_nodes_shelf.shelf != e.shelf {
+                                self.next.nodes_rack.get(*e).parents.push(index);
+                            } else {
+                                next_nodes_shelf.modify(*e, |present_node| {
+                                    present_node.parents.push(index);
+                                });
+                            }
+                        })
+                        .or_insert_with(|| {
+                            let node = Node {
+                                children: None,
+                                parents: smallvec![index],
+                                value: 0.0,
+                            };
+                            let index = next_nodes_shelf.append(node);
+                            index
+                        });
 
                     let act = Action {
                         node: *node_index.value(),
@@ -259,6 +284,7 @@ impl Action {
 struct State {
     board: BitBoard,
     bag: SevenBag,
+    hold: Option<PieceKind>,
 }
 
 impl From<GameState<BitBoard>> for State {
@@ -266,6 +292,7 @@ impl From<GameState<BitBoard>> for State {
         Self {
             board: state.board,
             bag: state.bag,
+            hold: state.hold,
         }
     }
 }

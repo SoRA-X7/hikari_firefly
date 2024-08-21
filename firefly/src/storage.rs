@@ -18,23 +18,23 @@ pub struct Shelf<T> {
 /// Represents an index that points to a specific location in the rack.
 #[derive(Debug, Clone, Copy)]
 pub struct Index {
-    shelf: usize,
-    slot: usize,
+    pub shelf: usize,
+    pub slot: usize,
 }
 
 /// Represents a range of indices within a shelf.
 #[derive(Debug, Clone, Copy)]
 pub struct IndexRange {
-    shelf: usize,
-    start: usize,
-    end: usize,
+    pub shelf: usize,
+    pub start: usize,
+    pub end: usize,
 }
 
 /// Represents a reference to a shelf's data.
 #[derive(Debug)]
 pub struct ShelfRef<'a, T> {
     data: MutexGuard<'a, Vec<T>>,
-    shelf: usize,
+    pub shelf: usize,
 }
 
 impl<T> Rack<T> {
@@ -121,6 +121,12 @@ impl<T> ShelfRef<'_, T> {
             start: self.data.len() - len,
             end: self.data.len(),
         }
+    }
+
+    /// Modifies the item at the specified index using the provided function.
+    pub fn modify(&mut self, index: Index, f: impl FnOnce(&mut T)) {
+        assert!(index.shelf == self.shelf);
+        f(&mut self.data[index.slot]);
     }
 }
 
