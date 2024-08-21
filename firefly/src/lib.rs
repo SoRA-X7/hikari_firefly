@@ -6,6 +6,7 @@ use search::Graph;
 
 mod mem;
 mod search;
+mod storage;
 
 pub struct HikariFireflyBot {
     graph: Arc<RwLock<Option<Graph>>>,
@@ -20,7 +21,7 @@ impl HikariFireflyBot {
 
     pub fn start(&self) {
         let state = GameState::default(); // todo: reset
-        self.graph.write().replace(Graph::new(state));
+        self.graph.write().replace(Graph::new(&state));
 
         for _ in 0..4 {
             let worker = Worker::new(self);
