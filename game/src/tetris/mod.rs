@@ -247,16 +247,17 @@ impl Default for SevenBag {
 
 pub trait Board: Clone + Default {
     fn occupied(&self, pos: (i8, i8)) -> bool;
+    fn height_of(&self, x: i8) -> u32;
+    fn is_empty(&self) -> bool;
+    fn distance_to_ground(&self, pos: (i8, i8)) -> u32;
+    fn add_piece_and_clear(&mut self, piece: PieceState) -> u32;
+
     fn collides(&self, piece: PiecePosition) -> bool {
         piece
             .cells()
             .iter()
             .any(|(x, y)| *x < 0 || 10 <= *x || *y < 0 || 64 <= *y || self.occupied((*x, *y)))
     }
-    fn is_empty(&self) -> bool;
-    fn distance_to_ground(&self, pos: (i8, i8)) -> u32;
-
-    fn add_piece_and_clear(&mut self, piece: PieceState) -> u32;
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Default, Deserialize)]
@@ -308,6 +309,11 @@ impl Board for BitBoard {
             .for_each(|col| clear_lines(col, cleared));
         cleared.count_ones()
     }
+
+    fn height_of(&self, x: i8) -> u32 {
+        debug_assert!(0 <= x && x < 10);
+        u64::BITS - self.cols[x as usize].leading_zeros()
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -341,6 +347,14 @@ impl Board for ColoredBoard {
             .skip((u64::BITS - (y as u32)) as usize)
             .take_while(|&c| *c == CellKind::None)
             .count() as u32
+    }
+
+    fn height_of(&self, x: i8) -> u32 {
+        64 - (self.cols[x as usize]
+            .iter()
+            .rev()
+            .take_while(|&c| *c == CellKind::None)
+            .count()) as u32
     }
 
     fn add_piece_and_clear(&mut self, piece: PieceState) -> u32 {
@@ -596,5 +610,47 @@ fn clear_lines(col: &mut u64, mut lines: u64) {
         *col = *col & mask | *col >> 1 & !mask;
         lines &= !(1 << i);
         lines >>= 1;
+    }
+}
+
+#[macro_export]
+macro_rules! bit_board {
+    ($($row:expr),*) => {
+        BitBoard {
+            cols: [0,1,2,3,4,5,6,7,8,9].map(|x| {
+                let mut col = 0u64;
+                let mut y = 0;
+                $(
+                    col |= match $row.chars().nth(x as usize).unwrap() {
+                        'x' => 1 << y,
+                        _ => 0
+                    };
+                    y += 1;
+                )*
+                col.reverse_bits() >> (64 - y)
+            })
+        }
+    };
+}
+
+#[cfg(test)]
+mod test {
+    pub use super::*;
+
+    #[test]
+    fn test_bit_board_macro() {
+        let expected = BitBoard {
+            cols: [
+                0b1111, 0b1111, 0b1111, 0b1011, 0b0001, 0b0000, 0b0000, 0b1111, 0b1111, 0b1111,
+            ],
+        };
+        let actual = bit_board! {
+            "xxxx___xxx",
+            "xxx____xxx",
+            "xxxx___xxx",
+            "xxxxx__xxx"
+        };
+
+        assert_eq!(expected, actual);
     }
 }

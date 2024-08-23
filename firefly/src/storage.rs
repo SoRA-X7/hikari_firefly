@@ -1,4 +1,4 @@
-use std::ops::DerefMut;
+use std::{ops::DerefMut, time::Duration};
 
 use parking_lot::{Mutex, MutexGuard};
 use rand::prelude::*;
@@ -16,14 +16,14 @@ pub struct Shelf<T> {
 }
 
 /// Represents an index that points to a specific location in the rack.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Index {
     pub shelf: usize,
     pub slot: usize,
 }
 
 /// Represents a range of indices within a shelf.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct IndexRange {
     pub shelf: usize,
     pub start: usize,
@@ -68,15 +68,28 @@ impl<T> Rack<T> {
     /// Returns a mutable reference to the item at the specified index.
     pub fn get(&self, index: Index) -> impl DerefMut<Target = T> + '_ {
         let shelf = &self.shelves[index.shelf];
-        let data = shelf.data.lock();
+        let data = shelf
+            .data
+            .try_lock_for(Duration::from_secs(1))
+            .expect(format!("Rack::get deadlock {:?}", index).as_str());
         MutexGuard::map(data, |data| &mut data[index.slot])
     }
 
     /// Returns a mutable reference to the items within the specified range.
     pub fn get_range(&self, range: IndexRange) -> impl DerefMut<Target = [T]> + '_ {
         let shelf = &self.shelves[range.shelf];
-        let data = shelf.data.lock();
+        let data = shelf
+            .data
+            .try_lock_for(Duration::from_secs(1))
+            .expect(format!("Rack::get_range deadlock {:?}", range).as_str());
         MutexGuard::map(data, |data| &mut data[range.start..range.end])
+    }
+
+    pub fn len(&self) -> usize {
+        self.shelves
+            .iter()
+            .map(|shelf| shelf.data.lock().len())
+            .sum()
     }
 }
 
@@ -90,14 +103,19 @@ impl<T> Shelf<T> {
 
     /// Allocates an item to the shelf and returns its slot index.
     pub fn alloc(&self, item: T) -> usize {
-        let mut data = self.data.lock();
+        let mut data = self
+            .data
+            .try_lock_for(Duration::from_secs(1))
+            .expect("Shelf::alloc deadlock");
         data.push(item);
         data.len() - 1
     }
 
     /// Rents the data vector of the shelf.
     pub fn rent(&self) -> MutexGuard<'_, Vec<T>> {
-        self.data.lock()
+        self.data
+            .try_lock_for(Duration::from_secs(1))
+            .expect("Shelf::rent deadlock")
     }
 }
 

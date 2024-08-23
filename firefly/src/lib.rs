@@ -1,13 +1,16 @@
+use core::fmt;
 use std::sync::Arc;
 
 use game::tetris::GameState;
 use parking_lot::RwLock;
 use search::Graph;
 
+mod eval;
 mod mem;
 mod search;
 mod storage;
 
+#[derive(Debug)]
 pub struct HikariFireflyBot {
     graph: Arc<RwLock<Option<Graph>>>,
 }
@@ -28,7 +31,7 @@ impl HikariFireflyBot {
 
         self.graph.write().replace(Graph::new(&state));
 
-        for _ in 0..2 {
+        for _ in 0..1 {
             let worker = Worker::new(self);
             rayon::spawn(move || {
                 worker.work_loop();
@@ -40,8 +43,18 @@ impl HikariFireflyBot {
         let mut graph = self.graph.write();
         *graph = None;
     }
+
+    pub fn stats(&self) -> usize {
+        let graph = self.graph.read();
+        if let Some(graph) = &*graph {
+            graph.count_nodes()
+        } else {
+            0
+        }
+    }
 }
 
+#[derive(Debug)]
 struct Worker {
     graph: Arc<RwLock<Option<Graph>>>,
 }
@@ -63,6 +76,17 @@ impl Worker {
                 return;
             }
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Stats {
+    pub nodes: Vec<usize>,
+}
+
+impl fmt::Display for Stats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Stats {{ nodes: {:?} }}", self.nodes)
     }
 }
 

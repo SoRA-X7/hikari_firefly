@@ -6,22 +6,24 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::storage::{Index, IndexRange, Rack};
 
+#[derive(Debug)]
 pub struct Graph {
     root_gen: Box<Generation>,
     root_state: GameState<BitBoard>,
 }
 
+#[derive(Debug)]
 pub struct Generation {
     nodes_rack: Rack<Node>,
     actions_rack: Rack<Action>,
     lookup: DashMap<State, Index>,
+    parents_lookup: DashMap<Index, SmallVec<[Index; 3]>>,
     next: Lazy<Box<Generation>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Node {
     children: Option<ChildData>,
-    parents: SmallVec<[Index; 3]>,
     value: f64,
     // acc: f64,
 }
@@ -45,11 +47,11 @@ impl Graph {
         // init first node
         let root_node = Node {
             children: None,
-            parents: smallvec![],
             value: 0.0,
             // acc: 0.0,
         };
         let root_node = root_gen.nodes_rack.alloc(root_node);
+        root_gen.parents_lookup.insert(root_node, smallvec![]);
         root_gen.lookup.insert(state.clone().into(), root_node);
 
         Self {
@@ -90,6 +92,20 @@ impl Graph {
         }
     }
 
+    pub fn count_nodes(&self) -> usize {
+        let mut count = 0;
+        let mut gen = &*self.root_gen;
+        loop {
+            let c = gen.nodes_rack.len();
+            if c == 0 {
+                break;
+            }
+            count += c;
+            gen = &*gen.next;
+        }
+        count
+    }
+
     fn backprop(gen_history: Vec<&Generation>, state: &GameState<BitBoard>) {
         let first = gen_history.last().unwrap().find_node_index(state).unwrap();
         let mut to_update = vec![first];
@@ -115,7 +131,13 @@ impl Graph {
 
                     // Enqueue parents of the current node
                     // TODO: find a better way to lock parents
-                    next_to_update.extend(node.parents.iter());
+                    next_to_update.extend(
+                        current_gen
+                            .parents_lookup
+                            .get(index)
+                            .as_deref()
+                            .unwrap_or(&smallvec![]),
+                    );
                 });
             }
             to_update = next_to_update;
@@ -131,6 +153,7 @@ impl Generation {
             nodes_rack: Rack::new(1 << 12),
             actions_rack: Rack::new(1 << 12),
             lookup: DashMap::new(),
+            parents_lookup: DashMap::new(),
             next: Lazy::new(|| Box::new(Self::new())),
         }
     }
@@ -150,7 +173,6 @@ impl Generation {
     pub fn select(&self, state: &GameState<BitBoard>) -> SelectResult {
         if let Some(index) = self.find_node_index(state) {
             self.with_node(index, |node| {
-                println!("{:?}", rayon::current_thread_index());
                 if node.children.is_none() {
                     return SelectResult::Expand;
                 }
@@ -189,6 +211,7 @@ impl Generation {
         let mut actions_shelf = self.actions_rack.rent_shelf();
         let mut next_nodes_shelf = self.next.nodes_rack.rent_shelf();
         let next_lookup = &self.next.lookup;
+        let next_parent_lookup = &self.next.parents_lookup;
 
         self.with_node(index, |node| {
             let moves = state.legal_moves(true).unwrap();
@@ -201,23 +224,17 @@ impl Generation {
 
                     let node_index = next_lookup
                         .entry(state.into())
-                        .and_modify(|e| {
-                            if next_nodes_shelf.shelf != e.shelf {
-                                self.next.nodes_rack.get(*e).parents.push(index);
-                            } else {
-                                next_nodes_shelf.modify(*e, |present_node| {
-                                    present_node.parents.push(index);
-                                });
-                            }
+                        .and_modify(|present| {
+                            next_parent_lookup.get_mut(present).unwrap().push(index);
                         })
                         .or_insert_with(|| {
                             let node = Node {
                                 children: None,
-                                parents: smallvec![index],
                                 value: 0.0,
                             };
-                            let index = next_nodes_shelf.append(node);
-                            index
+                            let created = next_nodes_shelf.append(node);
+                            next_parent_lookup.insert(created, smallvec![index]);
+                            created
                         });
 
                     let act = Action {
@@ -280,7 +297,7 @@ impl Action {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct State {
     board: BitBoard,
     bag: SevenBag,
