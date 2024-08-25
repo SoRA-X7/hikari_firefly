@@ -1,3 +1,5 @@
+use std::ops::ControlFlow;
+
 use dashmap::DashMap;
 use game::tetris::{BitBoard, GameState, Move, PieceKind, SevenBag};
 use once_cell::sync::Lazy;
@@ -144,6 +146,37 @@ impl<E: Evaluator> Graph<E> {
                 });
             }
             to_update = next_to_update;
+        }
+    }
+
+    pub fn best_plan(&self) -> Plan {
+        let mut gen = &*self.root_gen;
+        let mut state = self.root_state.clone();
+        let mut moves = vec![];
+
+        loop {
+            let index = gen.find_node_index(&state).unwrap();
+            match gen.with_node(index, |node| {
+                if let Some(children) = node.children.as_ref() {
+                    let best =
+                        gen.with_actions(children.0, |actions| actions.first().unwrap().clone());
+                    moves.push(best.mv);
+                    ControlFlow::Continue(best.mv)
+                } else {
+                    ControlFlow::Break(())
+                }
+            }) {
+                ControlFlow::Continue(mv) => {
+                    state.advance(mv);
+                    gen = &*gen.next;
+                }
+                ControlFlow::Break(_) => break,
+            }
+        }
+
+        Plan {
+            moves,
+            score: self.evaluator.evaluate_state(&state).select_score(),
         }
     }
 }
@@ -327,4 +360,10 @@ pub enum SelectResult<E: Evaluator> {
     Expand,
     /// Selection function failed
     Failed,
+}
+
+#[derive(Debug, Clone)]
+pub struct Plan {
+    pub moves: Vec<Move>,
+    pub score: i32,
 }

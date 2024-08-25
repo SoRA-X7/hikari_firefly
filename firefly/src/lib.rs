@@ -49,6 +49,16 @@ impl HikariFireflyBot {
         *graph = None;
     }
 
+    pub fn suggest(&self) {
+        let graph = self.graph.read();
+        if let Some(graph) = &*graph {
+            let best = graph.best_plan();
+            println!("Best: {:?}", best);
+        } else {
+            println!("No graph available");
+        }
+    }
+
     pub fn stats(&self) -> usize {
         let graph = self.graph.read();
         if let Some(graph) = &*graph {
