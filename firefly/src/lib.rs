@@ -2,7 +2,7 @@ use core::fmt;
 use std::sync::Arc;
 
 use eval::standard::StandardEvaluator;
-use game::tetris::GameState;
+use game::tetris::*;
 use parking_lot::RwLock;
 use search::Graph;
 
@@ -49,11 +49,22 @@ impl HikariFireflyBot {
         *graph = None;
     }
 
-    pub fn suggest(&self) {
+    pub fn suggest(&self) -> Option<Vec<Move>> {
         let graph = self.graph.read();
         if let Some(graph) = &*graph {
             let best = graph.best_plan();
             println!("Best: {:?}", best);
+            Some(best.moves)
+        } else {
+            println!("No graph available");
+            None
+        }
+    }
+
+    pub fn pick_move(&self, mv: Move) {
+        let mut graph = self.graph.write();
+        if let Some(graph) = &mut *graph {
+            graph.advance(mv);
         } else {
             println!("No graph available");
         }

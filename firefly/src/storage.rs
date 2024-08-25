@@ -45,6 +45,12 @@ impl<T> Rack<T> {
         }
     }
 
+    pub fn empty() -> Self {
+        Self {
+            shelves: Vec::new(),
+        }
+    }
+
     /// Allocates a single item to a random shelf and returns its index.
     pub fn alloc(&self, item: T) -> Index {
         // Use random number generator for now

@@ -179,6 +179,28 @@ impl<E: Evaluator> Graph<E> {
             score: self.evaluator.evaluate_state(&state).select_score(),
         }
     }
+
+    pub fn advance(&mut self, mv: Move) -> Result<(), ()> {
+        let index = self.root_gen.find_node_index(&self.root_state).unwrap();
+        self.root_gen.with_node(index, |node| {
+            if let Some(children) = node.children.as_ref() {
+                self.root_gen.with_actions(children.0, |actions| {
+                    if actions.iter().find(|action| action.mv == mv).is_some() {
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                })
+            } else {
+                Err(())
+            }
+        })?;
+        self.root_state.advance(mv);
+
+        let next = std::mem::take(&mut *self.root_gen.next);
+        self.root_gen = next;
+        Ok(())
+    }
 }
 
 impl<E: Evaluator> Generation<E> {
@@ -288,6 +310,18 @@ impl<E: Evaluator> Generation<E> {
             let child_data = ChildData(actions_shelf.append_vec(actions));
             node.children = Some(child_data);
         });
+    }
+}
+
+impl<E: Evaluator> Default for Generation<E> {
+    fn default() -> Self {
+        Self {
+            nodes_rack: Rack::empty(),
+            actions_rack: Rack::empty(),
+            lookup: DashMap::new(),
+            parents_lookup: DashMap::new(),
+            next: Lazy::new(|| Box::new(Self::default())),
+        }
     }
 }
 
