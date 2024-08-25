@@ -146,6 +146,11 @@ impl<T> ShelfRef<'_, T> {
         assert!(index.shelf == self.shelf);
         f(&mut self.data[index.slot]);
     }
+
+    pub fn get(&self, index: Index) -> &T {
+        assert!(index.shelf == self.shelf);
+        &self.data[index.slot]
+    }
 }
 
 #[cfg(test)]

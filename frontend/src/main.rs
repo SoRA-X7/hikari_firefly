@@ -36,7 +36,7 @@ impl Default for MyApp {
         Self {
             name: "Arthur".to_owned(),
             age: 42,
-            state: GameState::default(),
+            state: GameState::new(),
         }
     }
 }

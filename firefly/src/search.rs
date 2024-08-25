@@ -4,59 +4,62 @@ use once_cell::sync::Lazy;
 use rand::{distributions::WeightedIndex, prelude::*};
 use smallvec::{smallvec, SmallVec};
 
-use crate::storage::{Index, IndexRange, Rack};
+use crate::{
+    eval::{Accumulator, Evaluator},
+    storage::{Index, IndexRange, Rack},
+};
 
 #[derive(Debug)]
-pub struct Graph {
-    root_gen: Box<Generation>,
+pub struct Graph<E: Evaluator> {
+    root_gen: Box<Generation<E>>,
     root_state: GameState<BitBoard>,
+    evaluator: Box<E>,
 }
 
 #[derive(Debug)]
-pub struct Generation {
-    nodes_rack: Rack<Node>,
-    actions_rack: Rack<Action>,
+pub struct Generation<E: Evaluator> {
+    nodes_rack: Rack<Node<E>>,
+    actions_rack: Rack<Action<E>>,
     lookup: DashMap<State, Index>,
     parents_lookup: DashMap<Index, SmallVec<[Index; 3]>>,
-    next: Lazy<Box<Generation>>,
+    next: Lazy<Box<Generation<E>>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Node {
+pub struct Node<E: Evaluator> {
     children: Option<ChildData>,
-    value: f64,
-    // acc: f64,
+    value: E::Accumulator,
 }
 
 #[derive(Debug, Clone)]
 pub struct ChildData(IndexRange);
 
-#[derive(Debug, Clone, Copy)]
-pub struct Action {
+#[derive(Debug)]
+pub struct Action<E: Evaluator> {
     node: Index,
     mv: Move,
-    reward: f64,
-    acc: f64,
+    reward: E::TransientReward,
+    acc: E::Accumulator,
     visits: u32,
 }
 
-impl Graph {
-    pub fn new(state: &GameState<BitBoard>) -> Self {
+impl<E: Evaluator> Graph<E> {
+    pub fn new(state: &GameState<BitBoard>, evaluator: Box<E>) -> Self {
         let root_gen = Box::new(Generation::new());
         let root_state = state.clone();
         // init first node
         let root_node = Node {
             children: None,
-            value: 0.0,
-            // acc: 0.0,
+            value: evaluator.evaluate_state(state),
         };
         let root_node = root_gen.nodes_rack.alloc(root_node);
         root_gen.parents_lookup.insert(root_node, smallvec![]);
-        root_gen.lookup.insert(state.clone().into(), root_node);
+        root_gen.lookup.insert(State::new(state), root_node);
 
         Self {
             root_gen,
             root_state,
+            evaluator,
         }
     }
 
@@ -80,7 +83,7 @@ impl Graph {
                         // TODO: evaluate
                         return;
                     }
-                    gen.expand(&state);
+                    gen.expand(&state, self.evaluator.as_ref());
                     Self::backprop(gen_history, &state);
                     break;
                 }
@@ -106,7 +109,7 @@ impl Graph {
         count
     }
 
-    fn backprop(gen_history: Vec<&Generation>, state: &GameState<BitBoard>) {
+    fn backprop(gen_history: Vec<&Generation<E>>, state: &GameState<BitBoard>) {
         let first = gen_history.last().unwrap().find_node_index(state).unwrap();
         let mut to_update = vec![first];
 
@@ -114,18 +117,18 @@ impl Graph {
             let mut next_to_update = vec![];
             for index in to_update.iter() {
                 current_gen.with_node(*index, |node| {
-                    // Update self accumulated eval
+                    // Update accumulated eval of self
                     let mut children = current_gen
                         .actions_rack
                         .get_range(node.children.as_ref().unwrap().0);
                     children.iter_mut().for_each(|action| {
                         let child_node = current_gen.next.nodes_rack.get(action.node);
                         action.visits += 1;
-                        action.acc = child_node.value;
+                        action.acc = child_node.value.accumulate(action.reward);
                     });
 
                     // best-to-worst sort
-                    children.sort_by(|a, b| b.eval().partial_cmp(&a.eval()).unwrap());
+                    children.sort_by(|a, b| b.acc.select_score().cmp(&a.acc.select_score()));
                     // let best = children.first().unwrap();
                     // node.acc = best.acc;
 
@@ -142,12 +145,10 @@ impl Graph {
             }
             to_update = next_to_update;
         }
-
-        // while let Some(&[parent_gen, current_gen]) = gen_iter.next() {}
     }
 }
 
-impl Generation {
+impl<E: Evaluator> Generation<E> {
     pub fn new() -> Self {
         Self {
             nodes_rack: Rack::new(1 << 12),
@@ -159,18 +160,18 @@ impl Generation {
     }
 
     pub fn find_node_index(&self, state: &GameState<BitBoard>) -> Option<Index> {
-        self.lookup.get(&state.clone().into()).map(|x| *x)
+        self.lookup.get(&State::new(&state)).map(|x| *x)
     }
 
-    pub fn with_node<R>(&self, index: Index, f: impl FnOnce(&mut Node) -> R) -> R {
+    pub fn with_node<R>(&self, index: Index, f: impl FnOnce(&mut Node<E>) -> R) -> R {
         f(&mut self.nodes_rack.get(index))
     }
 
-    pub fn with_actions<R>(&self, range: IndexRange, f: impl FnOnce(&mut [Action]) -> R) -> R {
+    pub fn with_actions<R>(&self, range: IndexRange, f: impl FnOnce(&mut [Action<E>]) -> R) -> R {
         f(&mut *self.actions_rack.get_range(range))
     }
 
-    pub fn select(&self, state: &GameState<BitBoard>) -> SelectResult {
+    pub fn select(&self, state: &GameState<BitBoard>) -> SelectResult<E> {
         if let Some(index) = self.find_node_index(state) {
             self.with_node(index, |node| {
                 if node.children.is_none() {
@@ -181,13 +182,13 @@ impl Generation {
                 let selection = self.with_actions(children.0, |actions| {
                     let min = actions
                         .iter()
-                        .map(|action| action.acc)
-                        .fold(f64::INFINITY, f64::min);
-                    let weights: Vec<f64> = actions
+                        .map(|action| action.acc.select_score())
+                        .fold(i32::MAX, i32::min);
+                    let weights = actions
                         .iter()
-                        .map(|action| action.acc + min + 1.0)
-                        .collect();
-                    let dist = WeightedIndex::new(&weights).unwrap();
+                        .map(|action| action.acc.select_score() - min + 1)
+                        .collect::<Vec<_>>();
+                    let dist = WeightedIndex::new(weights).unwrap();
                     let mut rng = thread_rng();
                     let index = dist.sample(&mut rng);
                     let action = actions[index].clone();
@@ -204,7 +205,7 @@ impl Generation {
         }
     }
 
-    pub fn expand(&self, state: &GameState<BitBoard>) {
+    pub fn expand(&self, state: &GameState<BitBoard>, evaluator: &E) {
         let index = self.find_node_index(state).unwrap();
 
         // Rent shelves to reduce locking
@@ -219,29 +220,31 @@ impl Generation {
                 .iter()
                 .map(|&mv| {
                     let mut state = state.clone();
-                    let _ = state.advance(mv);
-                    // TODO: evaluation
+                    let placement = state.advance(mv);
 
                     let node_index = next_lookup
-                        .entry(state.into())
+                        .entry(State::new(&state))
                         .and_modify(|present| {
                             next_parent_lookup.get_mut(present).unwrap().push(index);
                         })
                         .or_insert_with(|| {
+                            let eval = evaluator.evaluate_state(&state);
                             let node = Node {
                                 children: None,
-                                value: 0.0,
+                                value: eval,
                             };
                             let created = next_nodes_shelf.append(node);
                             next_parent_lookup.insert(created, smallvec![index]);
                             created
                         });
 
+                    let reward = evaluator.evaluate_move(mv, placement, &state);
+                    // let child_node = next_nodes_shelf.get(*node_index.value());
                     let act = Action {
                         node: *node_index.value(),
                         mv,
-                        reward: 0.0,
-                        acc: 0.0,
+                        reward,
+                        acc: E::Accumulator::default(), // will be updated in backprop
                         visits: 0,
                     };
 
@@ -254,6 +257,14 @@ impl Generation {
         });
     }
 }
+
+// We need to implement Clone and Copy manually because of the generic parameter
+impl<E: Evaluator> Clone for Action<E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<E: Evaluator> Copy for Action<E> {}
 
 // impl Node {
 //     pub fn select_child(&self) -> Option<Action> {
@@ -291,12 +302,6 @@ impl Generation {
 //     }
 // }
 
-impl Action {
-    pub fn eval(&self) -> f64 {
-        self.reward + self.acc
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct State {
     board: BitBoard,
@@ -304,10 +309,10 @@ struct State {
     hold: Option<PieceKind>,
 }
 
-impl From<GameState<BitBoard>> for State {
-    fn from(state: GameState<BitBoard>) -> Self {
+impl State {
+    fn new(state: &GameState<BitBoard>) -> Self {
         Self {
-            board: state.board,
+            board: state.board.clone(),
             bag: state.bag,
             hold: state.hold,
         }
@@ -315,9 +320,9 @@ impl From<GameState<BitBoard>> for State {
 }
 
 #[derive(Debug)]
-pub enum SelectResult {
+pub enum SelectResult<E: Evaluator> {
     /// Node has children, return the best one
-    Ok(Action),
+    Ok(Action<E>),
     /// Node is a leaf, expand it
     Expand,
     /// Selection function failed

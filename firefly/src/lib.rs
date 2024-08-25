@@ -1,6 +1,7 @@
 use core::fmt;
 use std::sync::Arc;
 
+use eval::standard::StandardEvaluator;
 use game::tetris::GameState;
 use parking_lot::RwLock;
 use search::Graph;
@@ -10,9 +11,11 @@ mod mem;
 mod search;
 mod storage;
 
+type E = StandardEvaluator;
+
 #[derive(Debug)]
 pub struct HikariFireflyBot {
-    graph: Arc<RwLock<Option<Graph>>>,
+    graph: Arc<RwLock<Option<Graph<E>>>>,
 }
 
 impl HikariFireflyBot {
@@ -23,15 +26,17 @@ impl HikariFireflyBot {
     }
 
     pub fn start(&self) {
-        let mut state = GameState::default();
+        let mut state = GameState::new();
         for _ in 0..12 {
             state.fulfill_queue();
         }
         println!("Initial state: {:?}", state);
 
-        self.graph.write().replace(Graph::new(&state));
+        self.graph
+            .write()
+            .replace(Graph::new(&state, Box::new(StandardEvaluator::default())));
 
-        for _ in 0..1 {
+        for _ in 0..3 {
             let worker = Worker::new(self);
             rayon::spawn(move || {
                 worker.work_loop();
@@ -56,7 +61,7 @@ impl HikariFireflyBot {
 
 #[derive(Debug)]
 struct Worker {
-    graph: Arc<RwLock<Option<Graph>>>,
+    graph: Arc<RwLock<Option<Graph<E>>>>,
 }
 
 impl Worker {

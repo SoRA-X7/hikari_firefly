@@ -192,9 +192,9 @@ impl PieceState {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PlacementResult {
     pub lines_cleared: u32,
-    pub ren: u16,
+    pub ren: i32,
     pub spin: SpinKind,
-    pub is_b2b: bool,
+    pub is_b2b_clear: bool,
     pub is_pc: bool,
     pub death: bool,
 }
@@ -203,11 +203,34 @@ impl Default for PlacementResult {
     fn default() -> Self {
         Self {
             lines_cleared: 0,
-            ren: 0,
+            ren: -1,
             spin: SpinKind::None,
-            is_b2b: false,
+            is_b2b_clear: false,
             is_pc: false,
             death: false,
+        }
+    }
+}
+
+impl PlacementResult {
+    pub fn attack(&self) -> u32 {
+        if self.lines_cleared == 0 {
+            0
+        } else if self.is_pc {
+            10
+        } else {
+            let base = match self.spin {
+                SpinKind::None | SpinKind::Mini => match self.lines_cleared {
+                    1 => 0,
+                    2 => 1,
+                    3 => 2,
+                    4 => 4,
+                    _ => 0,
+                },
+                SpinKind::Full => 2 * self.lines_cleared,
+            };
+            let b2b = if self.is_b2b_clear { 1 } else { 0 };
+            base + b2b + ren_attack(self.ren)
         }
     }
 }
@@ -316,6 +339,15 @@ impl Board for BitBoard {
     }
 }
 
+impl BitBoard {
+    pub fn get_row(&self, y: i8) -> u64 {
+        self.cols
+            .iter()
+            .enumerate()
+            .fold(0, |acc, (x, col)| acc | (col >> y & 1) << x)
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ColoredBoard {
     pub cols: [[CellKind; 64]; 10],
@@ -406,17 +438,28 @@ impl From<Vec<[Option<char>; 10]>> for ColoredBoard {
     }
 }
 
-#[derive(Clone, Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GameState<B: Board> {
     pub board: B,
     pub hold: Option<PieceKind>,
     pub queue: VecDeque<PieceKind>,
     pub bag: SevenBag,
     pub b2b: bool,
-    pub ren: u16,
+    pub ren: i32, // defaults to -1, first clear is 0
 }
 
 impl<B: Board> GameState<B> {
+    pub fn new() -> Self {
+        Self {
+            board: Default::default(),
+            hold: None,
+            queue: Default::default(),
+            bag: Default::default(),
+            b2b: false,
+            ren: -1,
+        }
+    }
+
     pub fn fulfill_queue(&mut self) {
         self.queue.push_back(self.bag.take_rand());
     }
@@ -545,15 +588,17 @@ impl<B: Board> GameState<B> {
         let death = piece.pos.cells().iter().all(|(_, y)| *y >= 20);
         let lines_cleared = self.board.add_piece_and_clear(piece);
         let is_pc = self.board.is_empty();
-        let is_b2b = lines_cleared == 4 || piece.spin != SpinKind::None;
+        let is_b2b = lines_cleared == 4 || (lines_cleared > 0 && piece.spin != SpinKind::None);
         let is_b2b_clear = self.b2b && is_b2b;
         if lines_cleared > 0 {
             self.ren += 1;
             self.b2b = is_b2b
+        } else {
+            self.ren = -1;
         }
         PlacementResult {
             lines_cleared,
-            is_b2b: is_b2b_clear,
+            is_b2b_clear,
             is_pc,
             ren: self.ren,
             spin: piece.spin,
@@ -610,6 +655,16 @@ fn clear_lines(col: &mut u64, mut lines: u64) {
         *col = *col & mask | *col >> 1 & !mask;
         lines &= !(1 << i);
         lines >>= 1;
+    }
+}
+
+/// Returns the number of lines cleared by a combo.
+pub fn ren_attack(ren: i32) -> u32 {
+    const COMBO_ATTACK: [u32; 12] = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5];
+    if ren < 0 {
+        0
+    } else {
+        *COMBO_ATTACK.get(ren as usize).unwrap_or(&5)
     }
 }
 

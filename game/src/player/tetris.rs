@@ -19,7 +19,7 @@ pub struct TetrisPlayer {
 
 impl TetrisPlayer {
     pub fn new(interface: Box<dyn TetrisInterface>) -> Self {
-        let mut state = GameState::default();
+        let mut state = GameState::new();
         state.fulfill_queue();
 
         Self {
