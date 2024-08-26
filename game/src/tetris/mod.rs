@@ -460,8 +460,10 @@ impl<B: Board> GameState<B> {
         }
     }
 
-    pub fn fulfill_queue(&mut self) {
-        self.queue.push_back(self.bag.take_rand());
+    pub fn fulfill_queue(&mut self) -> PieceKind {
+        let p = self.bag.take_rand();
+        self.queue.push_back(p);
+        p
     }
 
     pub fn spawn_next(&mut self) -> Option<PieceState> {

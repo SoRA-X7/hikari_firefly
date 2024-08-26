@@ -90,7 +90,6 @@ impl<E: Evaluator> Graph<E> {
                     break;
                 }
                 SelectResult::Failed => {
-                    println!("Failed");
                     return;
                 }
             }
@@ -201,6 +200,12 @@ impl<E: Evaluator> Graph<E> {
         let next = std::mem::take(&mut *self.root_gen.next);
         self.root_gen = next;
         Ok(())
+    }
+
+    pub fn add_piece(&mut self, kind: PieceKind) {
+        self.root_state.add_piece(kind);
+
+        // TODO: speculate
     }
 }
 

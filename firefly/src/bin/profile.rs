@@ -1,4 +1,4 @@
-use firefly::HikariFireflyBot;
+use firefly::{BotConfig, HikariFireflyBot};
 
 fn main() {
     let server_addr = format!("127.0.0.1:{}", puffin_http::DEFAULT_PORT);
@@ -7,7 +7,8 @@ fn main() {
     puffin::set_scopes_on(true);
     puffin::GlobalProfiler::lock().new_frame();
 
-    let bot = HikariFireflyBot::new();
+    let config = BotConfig { num_workers: 4 };
+    let bot = HikariFireflyBot::new(config);
     bot.start();
 
     for _ in 0..5 {

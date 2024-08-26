@@ -1,5 +1,5 @@
 use core::fmt;
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 
 use eval::standard::StandardEvaluator;
 use game::tetris::*;
@@ -16,27 +16,29 @@ type E = StandardEvaluator;
 #[derive(Debug)]
 pub struct HikariFireflyBot {
     graph: Arc<RwLock<Option<Graph<E>>>>,
+    abort: Arc<AtomicBool>,
+    config: BotConfig,
 }
 
 impl HikariFireflyBot {
-    pub fn new() -> Self {
+    pub fn new(config: BotConfig) -> Self {
         Self {
             graph: Arc::new(RwLock::new(None)),
+            abort: Arc::new(AtomicBool::new(true)),
+            config,
         }
     }
 
+    pub fn reset(&self, state: Option<GameState<BitBoard>>) {
+        eprintln!("reset: {:?}", state);
+        let mut graph = self.graph.write();
+        *graph = state.map(|s| Graph::new(&s, Box::new(StandardEvaluator::default())));
+    }
+
     pub fn start(&self) {
-        let mut state = GameState::new();
-        for _ in 0..12 {
-            state.fulfill_queue();
-        }
-        println!("Initial state: {:?}", state);
-
-        self.graph
-            .write()
-            .replace(Graph::new(&state, Box::new(StandardEvaluator::default())));
-
-        for _ in 0..3 {
+        self.abort
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        for _ in 0..self.config.num_workers {
             let worker = Worker::new(self);
             rayon::spawn(move || {
                 worker.work_loop();
@@ -45,18 +47,15 @@ impl HikariFireflyBot {
     }
 
     pub fn stop(&self) {
-        let mut graph = self.graph.write();
-        *graph = None;
+        self.abort.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn suggest(&self) -> Option<Vec<Move>> {
         let graph = self.graph.read();
         if let Some(graph) = &*graph {
             let best = graph.best_plan();
-            println!("Best: {:?}", best);
             Some(best.moves)
         } else {
-            println!("No graph available");
             None
         }
     }
@@ -64,7 +63,14 @@ impl HikariFireflyBot {
     pub fn pick_move(&self, mv: Move) {
         let mut graph = self.graph.write();
         if let Some(graph) = &mut *graph {
-            graph.advance(mv);
+            graph.advance(mv).unwrap();
+        }
+    }
+
+    pub fn add_piece(&self, piece: PieceKind) {
+        let mut graph = self.graph.write();
+        if let Some(graph) = &mut *graph {
+            graph.add_piece(piece);
         } else {
             println!("No graph available");
         }
@@ -83,26 +89,37 @@ impl HikariFireflyBot {
 #[derive(Debug)]
 struct Worker {
     graph: Arc<RwLock<Option<Graph<E>>>>,
+    abort: Arc<AtomicBool>,
 }
 
 impl Worker {
     fn new(bot: &HikariFireflyBot) -> Self {
         Self {
             graph: bot.graph.clone(),
+            abort: bot.abort.clone(),
         }
     }
 
     fn work_loop(&self) {
-        loop {
+        eprintln!("Worker {} starting", rayon::current_thread_index().unwrap());
+
+        while !self.abort.load(std::sync::atomic::Ordering::Relaxed) {
             let graph = self.graph.read();
             if let Some(graph) = &*graph {
                 graph.work();
             } else {
-                println!("Worker {} stopping", rayon::current_thread_index().unwrap());
-                return;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                // TODO: replace with future
             }
         }
+
+        eprintln!("Worker {} stopping", rayon::current_thread_index().unwrap());
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BotConfig {
+    pub num_workers: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -113,19 +130,5 @@ pub struct Stats {
 impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Stats {{ nodes: {:?} }}", self.nodes)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let bot = HikariFireflyBot::new();
-        bot.start();
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        bot.stop();
-        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }
