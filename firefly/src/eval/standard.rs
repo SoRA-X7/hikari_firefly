@@ -132,6 +132,7 @@ impl Evaluator for StandardEvaluator {
     type TransientReward = Reward;
 
     fn evaluate_state(&self, state: &GameState<BitBoard>) -> Self::Accumulator {
+        puffin::profile_function!();
         let mut field_safety = 0;
         let mut field_power = 0;
 

@@ -112,6 +112,7 @@ impl<E: Evaluator> Graph<E> {
     }
 
     fn backprop(gen_history: Vec<&Generation<E>>, state: &GameState<BitBoard>) {
+        puffin::profile_function!();
         let first = gen_history.last().unwrap().find_node_index(state).unwrap();
         let mut to_update = vec![first];
 
@@ -227,6 +228,7 @@ impl<E: Evaluator> Generation<E> {
     }
 
     pub fn select(&self, state: &GameState<BitBoard>) -> SelectResult<E> {
+        puffin::profile_function!();
         if let Some(index) = self.find_node_index(state) {
             self.with_node(index, |node| {
                 if node.children.is_none() {
@@ -261,6 +263,7 @@ impl<E: Evaluator> Generation<E> {
     }
 
     pub fn expand(&self, state: &GameState<BitBoard>, evaluator: &E) {
+        puffin::profile_function!();
         let index = self.find_node_index(state).unwrap();
 
         // Rent shelves to reduce locking
@@ -270,7 +273,10 @@ impl<E: Evaluator> Generation<E> {
         let next_parent_lookup = &self.next.parents_lookup;
 
         self.with_node(index, |node| {
-            let moves = state.legal_moves(true).unwrap();
+            let moves = {
+                puffin::profile_scope!("legal_moves");
+                state.legal_moves(true).unwrap()
+            };
             let actions = moves
                 .iter()
                 .map(|&mv| {
