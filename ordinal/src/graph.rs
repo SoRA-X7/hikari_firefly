@@ -87,7 +87,7 @@ impl Graph {
         while let Some(node) = gen.nodes.get(&StateIndex::new(&state)) {
             let selfref = Arc::downgrade(&node.0);
             let mut node = node.0.lock();
-            // println!("{} {} {:?}", depth, node.visits, node.children.data);
+            // eprintln!("{} {} {:?}", depth, node.visits, node.children.data);
             if let Some((speculation_resolve, act)) = node.select_child() {
                 if let Some(resolved) = speculation_resolve {
                     state.add_piece(resolved);
@@ -98,11 +98,11 @@ impl Graph {
                 node.visits += 1;
                 depth += 1;
                 gen = &**gen.next;
-                // println!("len {}", gen.nodes.len());
+                // eprintln!("len {}", gen.nodes.len());
                 continue;
             } else {
-                // println!("expand {:?}", state);
-                // println!(
+                // eprintln!("expand {:?}", state);
+                // eprintln!(
                 //     "search_ok depth: {}, moves: {:?}, children: {:?}",
                 //     depth,
                 //     moves
@@ -154,7 +154,7 @@ impl Generation {
         parent: Weak<Mutex<Node>>,
         node_fn: impl FnOnce() -> Node,
     ) {
-        // println!("write {:?}", state);
+        // eprintln!("write {:?}", state);
         let node = self
             .nodes
             .entry(StateIndex::new(state))
@@ -165,7 +165,7 @@ impl Generation {
 
 impl Node {
     pub fn select_child(&self) -> Option<(Option<PieceKind>, &Action)> {
-        // println!("select {:?}", self.children);
+        // eprintln!("select {:?}", self.children);
 
         if self.children.is_empty() {
             return None;
@@ -193,7 +193,7 @@ impl Node {
             let v = a.acc + C * f32::sqrt(visits_sum_log / a.visits.load(Ordering::Relaxed) as f32);
             (v * 10000.0) as u32
         });
-        // println!("resolve {:?} {:?}", selection, speculation_resolve);
+        // eprintln!("resolve {:?} {:?}", selection, speculation_resolve);
         selection.and_then(|s| Some((speculation_resolve, s)))
     }
 

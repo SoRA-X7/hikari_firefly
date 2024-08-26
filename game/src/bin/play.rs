@@ -15,7 +15,7 @@ fn main() {
     loop {
         game.update();
         thread::sleep(time::Duration::from_micros(16666));
-        println!("{}", tick);
+        eprintln!("{}", tick);
         tick += 1;
     }
 }

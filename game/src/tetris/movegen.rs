@@ -59,7 +59,7 @@ impl MoveGenerator {
         let mut state = state.clone();
 
         let spawn = state.spawn_next().ok_or(())?;
-        // println!("spawn {:?}", spawn);
+        // eprintln!("spawn {:?}", spawn);
         gen.generate_internal(&state, spawn);
 
         if use_hold {
@@ -92,7 +92,7 @@ impl MoveGenerator {
 
         // Conduct a Breadth-first search
         while let Some(step) = self.next.pop() {
-            // println!("take {:?}", &step.0.piece);
+            // eprintln!("take {:?}", &step.0.piece);
             let piece = step.0.piece;
             let parent = *self.tree.get(&piece.pos).unwrap();
             let dropped = state.sonic_drop(&piece);
@@ -126,7 +126,7 @@ impl MoveGenerator {
                 self.locked.entry(placement).or_insert((dropped, piece.pos));
             }
         }
-        // println!("{}", self.locked.len());
+        // eprintln!("{}", self.locked.len());
     }
 
     fn check_write<B: Board>(

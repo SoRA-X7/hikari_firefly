@@ -13,10 +13,10 @@ mod tbp;
 //     for i in 0..10000 {
 //         bot.search();
 //         if i % 100 == 0 {
-//             println!("{}, {:?}", i, bot.stats());
+//             eprintln!("{}, {:?}", i, bot.stats());
 //         }
 //     }
-//     println!("{:?}", bot.stats());
+//     eprintln!("{:?}", bot.stats());
 // }
 
 fn main() {
@@ -40,7 +40,7 @@ fn main() {
 
     let outgoing = futures::sink::unfold((), |_, msg| {
         serde_json::to_writer(std::io::stdout(), &msg).unwrap();
-        println!();
+        eprintln!();
         async { Ok(()) }
     });
 

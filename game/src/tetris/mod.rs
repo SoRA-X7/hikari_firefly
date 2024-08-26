@@ -102,6 +102,7 @@ impl From<PieceKind> for CellKind {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Rotation {
     North,
     East,
@@ -114,7 +115,7 @@ impl Rotation {
         match self {
             Rotation::North => (x, y),
             Rotation::East => (y, -x),
-            Rotation::South => (-x, y),
+            Rotation::South => (-x, -y),
             Rotation::West => (-y, x),
         }
     }
@@ -154,6 +155,7 @@ impl Display for PiecePosition {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SpinKind {
     None,
     Mini,
@@ -541,7 +543,7 @@ impl<B: Board> GameState<B> {
                 rot: to,
                 ..piece.pos
             };
-            // println!("{:?} {:?} {:?}", piece.pos, clockwise, target);
+            // eprintln!("{:?} {:?} {:?}", piece.pos, clockwise, target);
             if !self.board.collides(target) {
                 let spin;
                 if piece.pos.kind != PieceKind::T {
@@ -641,7 +643,7 @@ impl<B: Board> GameState<B> {
     }
 
     pub fn add_piece(&mut self, piece: PieceKind) {
-        // println!("{:?} / {:?}", self.bag.0, piece);
+        // eprintln!("{:?} / {:?}", self.bag.0, piece);
         debug_assert!(self.bag.has(piece));
         self.bag.take(piece);
         self.queue.push_back(piece);
@@ -705,6 +707,46 @@ macro_rules! bit_board {
 #[cfg(test)]
 mod test {
     pub use super::*;
+
+    mod piece_position {
+        pub use super::*;
+
+        #[test]
+        fn test_cells() {
+            fn test(kind: PieceKind, x: i8, y: i8, rot: Rotation, expected: [(i8, i8); 4]) {
+                let actual = PiecePosition { kind, x, y, rot }.cells();
+                assert_eq!(expected, actual);
+            }
+            test(
+                PieceKind::Z,
+                0,
+                0,
+                Rotation::North,
+                [(-1, 1), (0, 0), (0, 1), (1, 0)],
+            );
+            test(
+                PieceKind::Z,
+                0,
+                0,
+                Rotation::East,
+                [(1, 1), (0, 0), (1, 0), (0, -1)],
+            );
+            test(
+                PieceKind::Z,
+                0,
+                0,
+                Rotation::South,
+                [(1, -1), (0, 0), (0, -1), (-1, 0)],
+            );
+            test(
+                PieceKind::Z,
+                0,
+                0,
+                Rotation::West,
+                [(-1, -1), (0, 0), (-1, 0), (0, 1)],
+            );
+        }
+    }
 
     #[test]
     fn test_bit_board_macro() {

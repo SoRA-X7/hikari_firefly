@@ -72,7 +72,7 @@ impl HikariFireflyBot {
         if let Some(graph) = &mut *graph {
             graph.add_piece(piece);
         } else {
-            println!("No graph available");
+            eprintln!("No graph available");
         }
     }
 
