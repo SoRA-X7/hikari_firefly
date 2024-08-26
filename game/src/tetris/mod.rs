@@ -235,6 +235,8 @@ impl PlacementResult {
     }
 }
 
+/// A 7-bag implementation as per guideline.
+/// If the bag is full, the internal set must be empty.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SevenBag(pub EnumSet<PieceKind>);
 
@@ -247,7 +249,7 @@ impl SevenBag {
         if self.0.is_empty() {
             self.0 = EnumSet::all();
         }
-        debug_assert!(self.0.contains(piece));
+        assert!(self.0.contains(piece));
         self.0.remove(piece);
     }
 
@@ -259,6 +261,16 @@ impl SevenBag {
         let piece = self.0.iter().skip(idx).next().unwrap();
         self.0.remove(piece);
         piece
+    }
+
+    pub fn put(&mut self, piece: PieceKind) {
+        assert!(!self.0.contains(piece));
+        self.0.insert(piece);
+
+        // the set must be empty if this bag is full
+        if self.0.len() == 7 {
+            self.0.clear();
+        }
     }
 }
 

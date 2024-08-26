@@ -1,7 +1,7 @@
-use std::ops::ControlFlow;
+use std::{collections::VecDeque, ops::ControlFlow};
 
 use dashmap::DashMap;
-use game::tetris::{BitBoard, GameState, Move, PieceKind, SevenBag};
+use game::tetris::*;
 use once_cell::sync::Lazy;
 use rand::{distributions::WeightedIndex, prelude::*};
 use smallvec::{smallvec, SmallVec};
@@ -14,7 +14,8 @@ use crate::{
 #[derive(Debug)]
 pub struct Graph<E: Evaluator> {
     root_gen: Box<Generation<E>>,
-    root_state: GameState<BitBoard>,
+    root_state: State,
+    queue: VecDeque<PieceKind>,
     evaluator: Box<E>,
 }
 
@@ -40,6 +41,7 @@ pub struct ChildData(IndexRange);
 pub struct Action<E: Evaluator> {
     node: Index,
     mv: Move,
+    current_piece: PieceKind,
     reward: E::TransientReward,
     acc: E::Accumulator,
     visits: u32,
@@ -48,7 +50,8 @@ pub struct Action<E: Evaluator> {
 impl<E: Evaluator> Graph<E> {
     pub fn new(state: &GameState<BitBoard>, evaluator: Box<E>) -> Self {
         let root_gen = Box::new(Generation::new());
-        let root_state = state.clone();
+        let root_state = State::new(state);
+
         // init first node
         let root_node = Node {
             children: None,
@@ -61,6 +64,7 @@ impl<E: Evaluator> Graph<E> {
         Self {
             root_gen,
             root_state,
+            queue: state.queue.clone(),
             evaluator,
         }
     }
@@ -68,6 +72,7 @@ impl<E: Evaluator> Graph<E> {
     pub fn work(&self) {
         let mut gen = &*self.root_gen;
         let mut state = self.root_state.clone();
+        let mut queue = self.queue.clone();
         let mut gen_history = vec![gen];
         let mut _action_history = vec![];
 
@@ -76,16 +81,17 @@ impl<E: Evaluator> Graph<E> {
             match gen.select(&state) {
                 SelectResult::Ok(action) => {
                     _action_history.push(action);
-                    state.advance(action.mv);
+                    state.advance(action.mv, action.current_piece);
+                    queue.pop_front().unwrap();
                     gen = &*gen.next;
                     gen_history.push(gen);
                 }
                 SelectResult::Expand => {
-                    if state.queue.is_empty() {
-                        // TODO: evaluate
+                    if queue.is_empty() {
+                        // TODO: speculate
                         return;
                     }
-                    gen.expand(&state, self.evaluator.as_ref());
+                    gen.expand(&state, queue.pop_front().unwrap(), self.evaluator.as_ref());
                     Self::backprop(gen_history, &state);
                     break;
                 }
@@ -110,7 +116,7 @@ impl<E: Evaluator> Graph<E> {
         count
     }
 
-    fn backprop(gen_history: Vec<&Generation<E>>, state: &GameState<BitBoard>) {
+    fn backprop(gen_history: Vec<&Generation<E>>, state: &State) {
         puffin::profile_function!();
         let first = gen_history.last().unwrap().find_node_index(state).unwrap();
         let mut to_update = vec![first];
@@ -150,11 +156,12 @@ impl<E: Evaluator> Graph<E> {
     }
 
     pub fn best_plan(&self) -> Plan {
+        eprintln!("Queue: {:?}", self.queue);
         let mut gen = &*self.root_gen;
         let mut state = self.root_state.clone();
         let mut moves = vec![];
 
-        loop {
+        for &current_piece in self.queue.iter() {
             let index = gen.find_node_index(&state).unwrap();
             match gen.with_node(index, |node| {
                 if let Some(children) = node.children.as_ref() {
@@ -167,20 +174,19 @@ impl<E: Evaluator> Graph<E> {
                 }
             }) {
                 ControlFlow::Continue(mv) => {
-                    state.advance(mv);
+                    state.advance(mv, current_piece);
                     gen = &*gen.next;
                 }
                 ControlFlow::Break(_) => break,
             }
         }
 
-        Plan {
-            moves,
-            score: self.evaluator.evaluate_state(&state).select_score(),
-        }
+        Plan { moves, score: 0 }
     }
 
     pub fn advance(&mut self, mv: Move) -> Result<(), ()> {
+        let current_piece = self.queue.pop_front().unwrap();
+
         let index = self.root_gen.find_node_index(&self.root_state).unwrap();
         self.root_gen.with_node(index, |node| {
             if let Some(children) = node.children.as_ref() {
@@ -195,15 +201,15 @@ impl<E: Evaluator> Graph<E> {
                 Err(())
             }
         })?;
-        self.root_state.advance(mv);
+        self.root_state.advance(mv, current_piece);
 
         let next = std::mem::take(&mut *self.root_gen.next);
         self.root_gen = next;
         Ok(())
     }
 
-    pub fn add_piece(&mut self, kind: PieceKind) {
-        self.root_state.add_piece(kind);
+    pub fn add_piece(&mut self, piece: PieceKind) {
+        self.queue.push_back(piece);
 
         // TODO: speculate
     }
@@ -220,8 +226,8 @@ impl<E: Evaluator> Generation<E> {
         }
     }
 
-    pub fn find_node_index(&self, state: &GameState<BitBoard>) -> Option<Index> {
-        self.lookup.get(&State::new(&state)).map(|x| *x)
+    pub fn find_node_index(&self, state: &State) -> Option<Index> {
+        self.lookup.get(state).map(|x| *x)
     }
 
     pub fn with_node<R>(&self, index: Index, f: impl FnOnce(&mut Node<E>) -> R) -> R {
@@ -232,7 +238,7 @@ impl<E: Evaluator> Generation<E> {
         f(&mut *self.actions_rack.get_range(range))
     }
 
-    pub fn select(&self, state: &GameState<BitBoard>) -> SelectResult<E> {
+    pub fn select(&self, state: &State) -> SelectResult<E> {
         puffin::profile_function!();
         if let Some(index) = self.find_node_index(state) {
             self.with_node(index, |node| {
@@ -267,7 +273,7 @@ impl<E: Evaluator> Generation<E> {
         }
     }
 
-    pub fn expand(&self, state: &GameState<BitBoard>, evaluator: &E) {
+    pub fn expand(&self, state: &State, current_piece: PieceKind, evaluator: &E) {
         puffin::profile_function!();
         let index = self.find_node_index(state).unwrap();
 
@@ -277,24 +283,27 @@ impl<E: Evaluator> Generation<E> {
         let next_lookup = &self.next.lookup;
         let next_parent_lookup = &self.next.parents_lookup;
 
+        // Reconstruct GameState
+        let game_state = state.reconstruct_with_first_piece(current_piece);
+
         self.with_node(index, |node| {
             let moves = {
                 puffin::profile_scope!("legal_moves");
-                state.legal_moves(true).unwrap()
+                game_state.legal_moves(true).unwrap()
             };
             let actions = moves
                 .iter()
                 .map(|&mv| {
-                    let mut state = state.clone();
-                    let placement = state.advance(mv);
+                    let mut game_state = game_state.clone();
+                    let placement = game_state.advance(mv);
 
                     let node_index = next_lookup
-                        .entry(State::new(&state))
+                        .entry(State::new(&game_state))
                         .and_modify(|present| {
                             next_parent_lookup.get_mut(present).unwrap().push(index);
                         })
                         .or_insert_with(|| {
-                            let eval = evaluator.evaluate_state(&state);
+                            let eval = evaluator.evaluate_state(&game_state);
                             let node = Node {
                                 children: None,
                                 value: eval,
@@ -304,12 +313,13 @@ impl<E: Evaluator> Generation<E> {
                             created
                         });
 
-                    let reward = evaluator.evaluate_move(mv, placement, &state);
+                    let reward = evaluator.evaluate_move(mv, placement, &game_state);
                     // let child_node = next_nodes_shelf.get(*node_index.value());
                     let act = Action {
                         node: *node_index.value(),
                         mv,
                         reward,
+                        current_piece,
                         acc: E::Accumulator::default(), // will be updated in backprop
                         visits: 0,
                     };
@@ -385,14 +395,78 @@ struct State {
     board: BitBoard,
     bag: SevenBag,
     hold: Option<PieceKind>,
+    ren: i32,
+    b2b: bool,
 }
 
 impl State {
     fn new(state: &GameState<BitBoard>) -> Self {
+        // Rewind the bag state
+        let mut bag = state.bag;
+        state.queue.iter().rev().for_each(|&piece| bag.put(piece));
+
         Self {
             board: state.board.clone(),
-            bag: state.bag,
+            bag,
             hold: state.hold,
+            ren: state.ren,
+            b2b: state.b2b,
+        }
+    }
+
+    fn advance(&mut self, mv: Move, mut current_piece: PieceKind) -> Result<PlacementResult, ()> {
+        match mv {
+            Move::Hold => {
+                if self.hold.is_some() {
+                    Err(())
+                } else {
+                    self.hold = Some(current_piece);
+                    Ok(PlacementResult::default())
+                }
+            }
+            Move::Place(piece) => {
+                if piece.pos.kind != current_piece {
+                    let _old = current_piece.clone();
+                    current_piece = self.hold.take().expect("hold must not be empty");
+                    self.hold = Some(_old);
+                }
+                debug_assert_eq!(current_piece, piece.pos.kind);
+
+                Ok(self.place_piece(piece))
+            }
+        }
+    }
+
+    fn place_piece(&mut self, piece: PieceState) -> PlacementResult {
+        let death = piece.pos.cells().iter().all(|(_, y)| *y >= 20);
+        let lines_cleared = self.board.add_piece_and_clear(piece);
+        let is_pc = self.board.is_empty();
+        let is_b2b = lines_cleared == 4 || (lines_cleared > 0 && piece.spin != SpinKind::None);
+        let is_b2b_clear = self.b2b && is_b2b;
+        if lines_cleared > 0 {
+            self.ren += 1;
+            self.b2b = is_b2b
+        } else {
+            self.ren = -1;
+        }
+        PlacementResult {
+            lines_cleared,
+            is_b2b_clear,
+            is_pc,
+            ren: self.ren,
+            spin: piece.spin,
+            death,
+        }
+    }
+
+    fn reconstruct_with_first_piece(&self, current_piece: PieceKind) -> GameState<BitBoard> {
+        GameState {
+            board: self.board.clone(),
+            bag: self.bag,
+            queue: VecDeque::from_iter([current_piece]),
+            hold: self.hold,
+            ren: self.ren,
+            b2b: self.b2b,
         }
     }
 }
