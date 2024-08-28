@@ -32,6 +32,7 @@ pub struct Generation<E: Evaluator> {
 pub struct Node<E: Evaluator> {
     children: Option<ChildData>,
     value: E::Accumulator,
+    dead: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ pub struct Action<E: Evaluator> {
     current_piece: PieceKind,
     reward: E::TransientReward,
     acc: E::Accumulator,
+    dead: bool, // Move itself is dead, or the resulting state is dead
     visits: u32,
 }
 
@@ -56,6 +58,7 @@ impl<E: Evaluator> Graph<E> {
         let root_node = Node {
             children: None,
             value: evaluator.evaluate_state(state),
+            dead: false,
         };
         let root_node = root_gen.nodes_rack.alloc(root_node);
         root_gen.parents_lookup.insert(root_node, smallvec![]);
@@ -76,15 +79,17 @@ impl<E: Evaluator> Graph<E> {
         let mut gen_history = vec![gen];
         let mut _action_history = vec![];
 
+        let mut depth = 0;
         loop {
             // Dig down tree until we reach a leaf
-            match gen.select(&state) {
+            match gen.select(&state, depth) {
                 SelectResult::Ok(action) => {
                     _action_history.push(action);
                     state.advance(action.mv, action.current_piece);
                     queue.pop_front().unwrap();
                     gen = &*gen.next;
                     gen_history.push(gen);
+                    depth += 1;
                 }
                 SelectResult::Expand => {
                     if queue.is_empty() {
@@ -116,6 +121,7 @@ impl<E: Evaluator> Graph<E> {
         count
     }
 
+    // MARK: - Backpropagate
     fn backprop(gen_history: Vec<&Generation<E>>, state: &State) {
         puffin::profile_function!();
         let first = gen_history.last().unwrap().find_node_index(state).unwrap();
@@ -125,18 +131,31 @@ impl<E: Evaluator> Graph<E> {
             let mut next_to_update = vec![];
             for index in to_update.iter() {
                 current_gen.with_node(*index, |node| {
-                    // Update accumulated eval of self
-                    let mut children = current_gen
-                        .actions_rack
-                        .get_range(node.children.as_ref().unwrap().0);
-                    children.iter_mut().for_each(|action| {
-                        let child_node = current_gen.next.nodes_rack.get(action.node);
-                        action.visits += 1;
-                        action.acc = child_node.value.accumulate(action.reward);
-                    });
+                    if !node.dead {
+                        // Update accumulated eval of self
+                        let mut children = current_gen
+                            .actions_rack
+                            .get_range(node.children.as_ref().unwrap().0);
 
-                    // best-to-worst sort
-                    children.sort_by(|a, b| b.acc.select_score().cmp(&a.acc.select_score()));
+                        // Update accumulated eval of children
+                        children.iter_mut().for_each(|action| {
+                            let child_node = current_gen.next.nodes_rack.get(action.node);
+                            action.visits += 1;
+                            action.acc = child_node.value.accumulate(action.reward);
+                            action.dead |= child_node.dead;
+                        });
+
+                        // if all of the children ended up dead, mark this node as dead
+                        if children.iter().all(|action| action.dead) {
+                            node.dead = true;
+                        }
+
+                        // best-to-worst sort
+                        children.sort_by(|a, b| match (a.dead, b.dead) {
+                            (false, false) => b.acc.select_score().cmp(&a.acc.select_score()),
+                            _ => a.dead.cmp(&b.dead),
+                        });
+                    }
                     // let best = children.first().unwrap();
                     // node.acc = best.acc;
 
@@ -156,10 +175,12 @@ impl<E: Evaluator> Graph<E> {
     }
 
     pub fn best_plan(&self) -> Plan {
-        eprintln!("Queue: {:?}", self.queue);
         let mut gen = &*self.root_gen;
         let mut state = self.root_state.clone();
         let mut moves = vec![];
+        let mut value = None;
+        let mut is_dead = None;
+        let mut first_children = None;
 
         for &current_piece in self.queue.iter() {
             let index = gen.find_node_index(&state).unwrap();
@@ -168,6 +189,15 @@ impl<E: Evaluator> Graph<E> {
                     let best =
                         gen.with_actions(children.0, |actions| actions.first().unwrap().clone());
                     moves.push(best.mv);
+                    if value.is_none() {
+                        value = Some(node.value);
+                    }
+                    if is_dead.is_none() {
+                        is_dead = Some(node.dead);
+                    }
+                    if first_children.is_none() {
+                        first_children = Some(children.0);
+                    }
                     ControlFlow::Continue(best.mv)
                 } else {
                     ControlFlow::Break(())
@@ -180,6 +210,11 @@ impl<E: Evaluator> Graph<E> {
                 ControlFlow::Break(_) => break,
             }
         }
+        eprintln!(
+            "Best plan: {:?} {:?} {:?} {:?}",
+            is_dead, first_children, value, moves
+        );
+        eprintln!("Nodes: {}", self.count_nodes());
 
         Plan { moves, score: 0 }
     }
@@ -238,24 +273,39 @@ impl<E: Evaluator> Generation<E> {
         f(&mut *self.actions_rack.get_range(range))
     }
 
-    pub fn select(&self, state: &State) -> SelectResult<E> {
+    // MARK: - Select
+    pub fn select(&self, state: &State, depth: u32) -> SelectResult<E> {
         puffin::profile_function!();
         if let Some(index) = self.find_node_index(state) {
             self.with_node(index, |node| {
+                if node.dead {
+                    eprintln!("{} {:?}", depth, node.children);
+                    unreachable!("dead node in selection");
+                }
                 if node.children.is_none() {
                     return SelectResult::Expand;
                 }
 
                 let children = node.children.as_ref().unwrap();
                 let selection = self.with_actions(children.0, |actions| {
+                    // Ignore death
+                    let actions = actions
+                        .iter()
+                        .filter(|action| !action.dead)
+                        .collect::<Vec<_>>();
+                    if actions.is_empty() {
+                        unreachable!("no valid actions in selection");
+                    }
+
                     let min = actions
                         .iter()
                         .map(|action| action.acc.select_score())
                         .fold(i32::MAX, i32::min);
+
                     let weights = actions
                         .iter()
-                        .map(|action| action.acc.select_score() - min + 1)
-                        .collect::<Vec<_>>();
+                        .map(|action| action.acc.select_score() - min + 1);
+
                     let dist = WeightedIndex::new(weights).unwrap();
                     let mut rng = thread_rng();
                     let index = dist.sample(&mut rng);
@@ -273,6 +323,7 @@ impl<E: Evaluator> Generation<E> {
         }
     }
 
+    // MARK: - Expand
     pub fn expand(&self, state: &State, current_piece: PieceKind, evaluator: &E) {
         puffin::profile_function!();
         let index = self.find_node_index(state).unwrap();
@@ -287,9 +338,16 @@ impl<E: Evaluator> Generation<E> {
         let game_state = state.reconstruct_with_first_piece(current_piece);
 
         self.with_node(index, |node| {
+            debug_assert!(node.children.is_none());
+
             let moves = {
                 puffin::profile_scope!("legal_moves");
-                game_state.legal_moves(true).unwrap()
+                game_state.legal_moves(true)
+            };
+            let Ok(moves) = moves else {
+                // Dead node (suffocated)
+                node.dead = true;
+                return;
             };
             let actions = moves
                 .iter()
@@ -303,10 +361,16 @@ impl<E: Evaluator> Generation<E> {
                             next_parent_lookup.get_mut(present).unwrap().push(index);
                         })
                         .or_insert_with(|| {
-                            let eval = evaluator.evaluate_state(&game_state);
+                            let value = if placement.death {
+                                // piece is placed above the sky limit
+                                evaluator.death_state()
+                            } else {
+                                evaluator.evaluate_state(&game_state)
+                            };
                             let node = Node {
                                 children: None,
-                                value: eval,
+                                value,
+                                dead: false,
                             };
                             let created = next_nodes_shelf.append(node);
                             next_parent_lookup.insert(created, smallvec![index]);
@@ -321,6 +385,7 @@ impl<E: Evaluator> Generation<E> {
                         reward,
                         current_piece,
                         acc: E::Accumulator::default(), // will be updated in backprop
+                        dead: placement.death,
                         visits: 0,
                     };
 
@@ -414,25 +479,30 @@ impl State {
         }
     }
 
-    fn advance(&mut self, mv: Move, mut current_piece: PieceKind) -> Result<PlacementResult, ()> {
+    fn advance(&mut self, mv: Move, mut current_piece: PieceKind) -> PlacementResult {
         match mv {
             Move::Hold => {
                 if self.hold.is_some() {
-                    Err(())
+                    unreachable!("hold must be empty");
                 } else {
                     self.hold = Some(current_piece);
-                    Ok(PlacementResult::default())
+                    PlacementResult::default()
                 }
             }
             Move::Place(piece) => {
+                // if provided piece is not the current piece, swap it with hold
                 if piece.pos.kind != current_piece {
-                    let _old = current_piece.clone();
-                    current_piece = self.hold.take().expect("hold must not be empty");
-                    self.hold = Some(_old);
+                    current_piece = self
+                        .hold
+                        .replace(current_piece)
+                        .expect("hold must not be empty");
                 }
-                debug_assert_eq!(current_piece, piece.pos.kind);
 
-                Ok(self.place_piece(piece))
+                if piece.pos.kind != current_piece {
+                    unreachable!("current_piece doesn't match even after hold operation");
+                } else {
+                    self.place_piece(piece)
+                }
             }
         }
     }

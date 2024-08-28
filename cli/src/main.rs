@@ -1,5 +1,3 @@
-use std::io::{self, BufRead};
-
 use firefly::{BotConfig, HikariFireflyBot};
 use game::tetris::{GameState, Move, SevenBag};
 use tbp::*;
@@ -43,7 +41,7 @@ fn main() {
                                 b2b: start.back_to_back,
                                 bag: match start.randomizer {
                                     Randomizer::SevenBag { bag_state } => SevenBag(bag_state),
-                                    _ => panic!(),
+                                    _ => unimplemented!(),
                                 },
                             }));
                             bot.start();

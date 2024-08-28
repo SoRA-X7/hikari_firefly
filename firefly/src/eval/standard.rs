@@ -44,10 +44,10 @@ pub struct Weights {
 impl Default for Weights {
     fn default() -> Self {
         Self {
-            clear1: -500,
-            clear2: -375,
-            clear3: -160,
-            clear4: 800,
+            clear1: 5000,
+            clear2: 5000,
+            clear3: 5000,
+            clear4: 5000,
             t_spin1: 220,
             t_spin2: 1000,
             t_spin3: 1270,
@@ -66,7 +66,7 @@ impl Default for Weights {
             bump_sum_sq: -10,
             max_height_diff: 0,
             well_depth: 100,
-            max_height: 20,
+            max_height: -300,
             top_50: -60,
             top_75: -300,
             danger: -20,
@@ -130,6 +130,13 @@ impl Accumulator for Value {
 impl Evaluator for StandardEvaluator {
     type Accumulator = Value;
     type TransientReward = Reward;
+
+    fn death_state(&self) -> Value {
+        Value {
+            value: [-10000, -10000, 0],
+            spike: 0,
+        }
+    }
 
     fn evaluate_state(&self, state: &GameState<BitBoard>) -> Self::Accumulator {
         puffin::profile_function!();

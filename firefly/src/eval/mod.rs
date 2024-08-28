@@ -14,6 +14,7 @@ pub trait Evaluator: Debug + Sync + Send {
         placement: PlacementResult,
         state: &GameState<BitBoard>,
     ) -> Self::TransientReward;
+    fn death_state(&self) -> Self::Accumulator;
 }
 
 pub trait Accumulator: Debug + Sync + Send + Default {

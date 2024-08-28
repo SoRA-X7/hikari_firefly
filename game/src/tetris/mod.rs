@@ -183,6 +183,18 @@ impl PieceState {
         }
     }
 
+    pub const fn new_with_spin(
+        kind: PieceKind,
+        (x, y): (i8, i8),
+        rot: Rotation,
+        spin: SpinKind,
+    ) -> Self {
+        PieceState {
+            pos: PiecePosition { kind, x, y, rot },
+            spin,
+        }
+    }
+
     pub fn translate(self, delta: (i8, i8)) -> Self {
         PieceState {
             pos: self.pos.translate(delta),
@@ -686,6 +698,11 @@ pub fn ren_attack(ren: i32) -> u32 {
 
 #[macro_export]
 macro_rules! bit_board {
+    () => {
+        BitBoard {
+            cols: [0; 10]
+        }
+    };
     ($($row:expr),*) => {
         BitBoard {
             cols: [0,1,2,3,4,5,6,7,8,9].map(|x| {
@@ -745,6 +762,80 @@ mod test {
                 Rotation::West,
                 [(-1, -1), (0, 0), (-1, 0), (0, 1)],
             );
+        }
+    }
+
+    mod piece_state {
+        pub use super::*;
+
+        #[test]
+        fn test_srs() {
+            let piece = PieceState::new(PieceKind::T, (3, 1), Rotation::North);
+            let board = bit_board! {
+                "xx_xxxxxxx"
+            };
+            let state = GameState {
+                board,
+                ..GameState::new()
+            };
+            assert_eq!(
+                state.rotate(piece, true),
+                Some(PieceState::new(PieceKind::T, (2, 1), Rotation::East))
+            );
+
+            let piece = PieceState::new(PieceKind::T, (3, 1), Rotation::North);
+            let board = bit_board! {
+                "_xxxxxxxxx"
+            };
+            let state = GameState {
+                board,
+                ..GameState::new()
+            };
+            assert_eq!(
+                state.rotate(piece, true),
+                Some(PieceState::new(PieceKind::T, (2, 2), Rotation::East))
+            );
+
+            let piece = PieceState::new(PieceKind::T, (2, 3), Rotation::North);
+            let board = bit_board! {
+                "xx________",
+                "x_________",
+                "x_xxxxxxxx",
+                "x__xxxxxxx",
+                "x_xxxxxxxx"
+            };
+            let state = GameState {
+                board,
+                ..GameState::new()
+            };
+            assert_eq!(
+                state.rotate(piece, true),
+                Some(PieceState::new_with_spin(
+                    PieceKind::T,
+                    (1, 1),
+                    Rotation::East,
+                    SpinKind::Full
+                ))
+            );
+        }
+    }
+
+    mod bit_board {
+        pub use super::*;
+
+        #[test]
+        fn test_height_of() {
+            let board = bit_board! {
+                "_x___x__x_",
+                "xxx__x___x",
+                "xxxx______"
+            };
+            [2, 3, 2, 1, 0, 3, 0, 0, 3, 2]
+                .iter()
+                .enumerate()
+                .for_each(|(x, &h)| {
+                    assert_eq!(board.height_of(x as i8), h);
+                });
         }
     }
 
