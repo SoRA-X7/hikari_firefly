@@ -1,5 +1,5 @@
 use enumset::{EnumSet, EnumSetType};
-use game::tetris::{BitBoard, ColoredBoard, PieceKind, PieceState};
+use game::tetris::{BitBoard, PieceKind, PieceState};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]

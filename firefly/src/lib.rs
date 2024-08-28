@@ -1,7 +1,7 @@
 use core::fmt;
 use std::sync::{atomic::AtomicBool, Arc};
 
-use eval::standard::StandardEvaluator;
+use eval::SimpleEvaluator;
 use game::tetris::*;
 use parking_lot::RwLock;
 use search::Graph;
@@ -11,7 +11,7 @@ mod mem;
 mod search;
 mod storage;
 
-type E = StandardEvaluator;
+type E = SimpleEvaluator;
 
 #[derive(Debug)]
 pub struct HikariFireflyBot {
@@ -32,7 +32,7 @@ impl HikariFireflyBot {
     pub fn reset(&self, state: Option<GameState<BitBoard>>) {
         eprintln!("reset: {:?}", state);
         let mut graph = self.graph.write();
-        *graph = state.map(|s| Graph::new(&s, Box::new(StandardEvaluator::default())));
+        *graph = state.map(|s| Graph::new(&s, Box::new(E::default())));
     }
 
     pub fn start(&self) {

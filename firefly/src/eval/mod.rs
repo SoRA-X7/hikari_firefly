@@ -1,7 +1,13 @@
 use core::fmt::Debug;
 use game::tetris::*;
 
-pub mod standard;
+mod simple;
+mod standard;
+
+#[allow(unused)]
+pub use simple::SimpleEvaluator;
+#[allow(unused)]
+pub use standard::StandardEvaluator;
 
 pub trait Evaluator: Debug + Sync + Send {
     type TransientReward: Clone + Copy + Debug;
