@@ -114,7 +114,7 @@ impl Player {
         tokio::spawn(async move {
             loop {
                 if let Some(s) = reader.next_line().await.expect("read line") {
-                    eprintln!("[RECV] {}", s);
+                    eprintln!("[RECV/{}] {}", id, s);
                     let msg = serde_json::from_str(&s).expect("deserialize json");
                     bot_send.send(msg).await.expect("send");
                 } else {
@@ -133,7 +133,7 @@ impl Player {
                 match bot_recv.recv().await {
                     Some(msg) => {
                         let s = serde_json::to_string(&msg).expect("serialize json");
-                        eprintln!("[SEND] {}", s);
+                        eprintln!("[SEND/{}] {}", id, s);
                         writer.write_all(s.as_bytes()).await.expect("write");
                         writer.write_all("\n".as_bytes()).await.expect("write");
                         writer.flush().await.expect("flush");
@@ -273,22 +273,28 @@ impl Player {
                                     .map_err(|_| BotStopReason::Death)?;
                             }
                             // then
-                            match mv {
+                            let pl = match mv {
                                 Move::Place(piece) => {
                                     update_notifier.wait_for_frames(cost as u64).await;
                                     self.advance(Move::Place(piece))
                                         .await
-                                        .map_err(|_| BotStopReason::Death)?;
+                                        .map_err(|_| BotStopReason::Death)?
                                 }
                                 _ => unreachable!(),
-                            }
+                            };
                             self.send
                                 .send(tbp::FrontendMessage::Play { mv: *piece })
                                 .await
                                 .map_err(|_| BotStopReason::Disconnection)?;
 
                             // placement delay
-                            update_notifier.wait_for_frames(60).await;
+                            let delay = if pl.lines_cleared > 0 && !pl.is_pc {
+                                15
+                            } else {
+                                0
+                            };
+
+                            update_notifier.wait_for_frames(delay).await;
                             return Ok(());
                         }
                     }
