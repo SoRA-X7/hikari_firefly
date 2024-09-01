@@ -1,9 +1,6 @@
 use firefly::{BotConfig, HikariFireflyBot};
-use game::tetris::{GameState, Move, SevenBag};
-use tbp::*;
+use game::tetris::{tbp::*, GameState, Move, SevenBag};
 use tokio::io::AsyncBufReadExt;
-
-mod tbp;
 
 fn main() {
     tokio::runtime::Builder::new_current_thread()
@@ -15,10 +12,10 @@ fn main() {
             let mut last_reply_moves = vec![];
 
             write_message(BotMessage::Info {
-                name: "Hikari",
-                version: env!("CARGO_PKG_VERSION"),
-                author: "SoRA-X7",
-                features: &["randomizer"],
+                name: "Hikari".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                author: "SoRA-X7".to_owned(),
+                features: vec!["randomizer".to_owned()],
             });
 
             let mut reader = tokio::io::BufReader::new(tokio::io::stdin()).lines();
@@ -34,7 +31,7 @@ fn main() {
                                 break;
                             };
                             bot.reset(Some(GameState {
-                                board: start.board,
+                                board: start.board.into(),
                                 queue: start.queue.into(),
                                 hold: start.hold,
                                 ren: start.combo as i32 - 1,

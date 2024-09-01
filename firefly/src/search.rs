@@ -342,7 +342,7 @@ impl<E: Evaluator> Generation<E> {
 
             let moves = {
                 puffin::profile_scope!("legal_moves");
-                game_state.legal_moves(true)
+                game_state.legal_moves(true).map(|gen| gen.moves())
             };
             let Ok(moves) = moves else {
                 // Dead node (suffocated)

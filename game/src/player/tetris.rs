@@ -134,7 +134,7 @@ impl Player for TetrisPlayer {
                 }
             }
 
-            if self.state.is_grounded(&self.current_piece.unwrap()) {
+            if self.state.is_grounded(self.current_piece.unwrap()) {
                 self.lock_delay += 1;
                 if self.lock_delay > 60 {
                     self.advance()

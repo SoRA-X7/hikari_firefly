@@ -1,12 +1,14 @@
+use super::*;
 use enumset::{EnumSet, EnumSetType};
-use game::tetris::{BitBoard, PieceKind, PieceState};
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "type")]
 pub enum FrontendMessage {
-    Rules,
+    Rules {
+        randomizer: String,
+    },
     Start(Start),
     Play {
         #[serde(rename = "move")]
@@ -22,15 +24,15 @@ pub enum FrontendMessage {
     Unknown,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "type")]
 pub enum BotMessage {
     Info {
-        name: &'static str,
-        version: &'static str,
-        author: &'static str,
-        features: &'static [&'static str],
+        name: String,
+        version: String,
+        author: String,
+        features: Vec<String>,
     },
     Ready,
     Suggestion {
@@ -39,9 +41,9 @@ pub enum BotMessage {
     },
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Start {
-    pub board: BitBoard,
+    pub board: ColoredBoard,
     pub queue: Vec<PieceKind>,
     pub hold: Option<PieceKind>,
     pub combo: u32,
@@ -50,12 +52,15 @@ pub struct Start {
     pub randomizer: Randomizer,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "type")]
 pub enum Randomizer {
     SevenBag {
-        #[serde(deserialize_with = "collect_enumset")]
+        #[serde(
+            deserialize_with = "collect_enumset",
+            serialize_with = "serialize_enumset"
+        )]
         bag_state: EnumSet<PieceKind>,
     },
     #[serde(other)]
@@ -68,7 +73,7 @@ impl Default for Randomizer {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoveInfo {
     pub nodes: u64,
     pub nps: f64,
@@ -81,4 +86,12 @@ where
     T: EnumSetType + Deserialize<'de>,
 {
     Ok(Vec::<T>::deserialize(de)?.into_iter().collect())
+}
+
+fn serialize_enumset<S, T>(set: &EnumSet<T>, ser: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    T: EnumSetType + Serialize,
+{
+    set.iter().collect::<Vec<_>>().serialize(ser)
 }

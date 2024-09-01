@@ -8,9 +8,10 @@ use movegen::MoveGenerator;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 
-mod movegen;
+pub mod movegen;
+pub mod tbp;
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialOrd, Ord, Serialize, Deserialize, EnumSetType)]
 pub enum Instruction {
     None,
     Left,
@@ -74,7 +75,7 @@ impl PieceKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub enum CellKind {
     None,
     S,
@@ -247,6 +248,14 @@ impl PlacementResult {
             base + b2b + ren_attack(self.ren)
         }
     }
+
+    pub fn ok_or<E>(self, err: E) -> Result<Self, E> {
+        if self.death {
+            Err(err)
+        } else {
+            Ok(self)
+        }
+    }
 }
 
 /// A 7-bag implementation as per guideline.
@@ -372,9 +381,22 @@ impl BitBoard {
             .enumerate()
             .fold(0, |acc, (x, col)| acc | (col >> y & 1) << x)
     }
+
+    pub fn into_colored(self, fill_with: CellKind) -> ColoredBoard {
+        let mut cols = [[CellKind::None; 64]; 10];
+        for x in 0..10 {
+            for y in 0..64 {
+                if self.cols[x] & (1 << y) > 0 {
+                    cols[x][y] = fill_with;
+                }
+            }
+        }
+        ColoredBoard { cols }
+    }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(from = "Vec<Vec<Option<char>>>", into = "Vec<Vec<Option<char>>>")]
 pub struct ColoredBoard {
     pub cols: [[CellKind; 64]; 10],
 }
@@ -384,6 +406,66 @@ impl Default for ColoredBoard {
         Self {
             cols: [[CellKind::None; 64]; 10],
         }
+    }
+}
+
+impl From<Vec<Vec<Option<char>>>> for ColoredBoard {
+    fn from(v: Vec<Vec<Option<char>>>) -> Self {
+        let mut cols = [[CellKind::None; 64]; 10];
+        for x in 0..10 {
+            for y in 0..40 {
+                cols[x][y] = v[y][x].map_or(CellKind::None, |c| match c {
+                    'S' => CellKind::S,
+                    'Z' => CellKind::Z,
+                    'J' => CellKind::J,
+                    'L' => CellKind::L,
+                    'T' => CellKind::T,
+                    'O' => CellKind::O,
+                    'I' => CellKind::I,
+                    'G' => CellKind::Gbg,
+                    _ => CellKind::None,
+                });
+            }
+        }
+        ColoredBoard { cols }
+    }
+}
+
+impl Into<Vec<Vec<Option<char>>>> for ColoredBoard {
+    fn into(self) -> Vec<Vec<Option<char>>> {
+        let mut v = vec![];
+        for y in 0..40 {
+            let mut row = vec![];
+            for x in 0..10 {
+                row.push(match self.cols[x][y] {
+                    CellKind::None => None,
+                    CellKind::S => Some('S'),
+                    CellKind::Z => Some('Z'),
+                    CellKind::J => Some('J'),
+                    CellKind::L => Some('L'),
+                    CellKind::T => Some('T'),
+                    CellKind::O => Some('O'),
+                    CellKind::I => Some('I'),
+                    CellKind::Gbg => Some('G'),
+                });
+            }
+            v.push(row);
+        }
+        v
+    }
+}
+
+impl Into<BitBoard> for ColoredBoard {
+    fn into(self) -> BitBoard {
+        let mut cols = [0; 10];
+        for x in 0..10 {
+            for y in 0..64 {
+                if self.cols[x][y] != CellKind::None {
+                    cols[x] |= 1 << y;
+                }
+            }
+        }
+        BitBoard { cols }
     }
 }
 
@@ -585,7 +667,7 @@ impl<B: Board> GameState<B> {
         None
     }
 
-    pub fn sonic_drop(&self, piece: &PieceState) -> Option<PieceState> {
+    pub fn sonic_drop(&self, piece: PieceState) -> Option<PieceState> {
         let distance = piece
             .pos
             .cells()
@@ -607,7 +689,7 @@ impl<B: Board> GameState<B> {
         })
     }
 
-    pub fn is_grounded(&self, piece: &PieceState) -> bool {
+    pub fn is_grounded(&self, piece: PieceState) -> bool {
         self.sonic_drop(piece)
             .map_or(false, |dropped| dropped.pos == piece.pos)
     }
@@ -661,9 +743,9 @@ impl<B: Board> GameState<B> {
         self.queue.push_back(piece);
     }
 
-    pub fn legal_moves(&self, use_hold: bool) -> Result<Vec<Move>, ()> {
+    pub fn legal_moves(&self, use_hold: bool) -> Result<MoveGenerator, ()> {
         let gen = MoveGenerator::generate_for(self, use_hold)?;
-        Ok(gen.moves())
+        Ok(gen)
     }
 }
 
@@ -692,7 +774,9 @@ pub fn ren_attack(ren: i32) -> u32 {
     if ren < 0 {
         0
     } else {
-        *COMBO_ATTACK.get(ren as usize).unwrap_or(&5)
+        *COMBO_ATTACK
+            .get(ren as usize)
+            .unwrap_or(COMBO_ATTACK.last().unwrap())
     }
 }
 

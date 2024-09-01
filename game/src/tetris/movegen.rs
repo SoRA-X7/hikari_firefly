@@ -4,16 +4,16 @@ use std::{
     collections::{BinaryHeap, HashMap},
 };
 
-const MAX_DEPTH: u8 = 32;
-const MAX_NON_T_COST: u8 = 20;
+const MAX_DEPTH: u16 = 32;
+const MAX_NON_T_COST: u16 = 20;
 
 #[derive(Clone, Copy, Hash, Eq)]
 pub struct Step {
     piece: PieceState,
     parent: Option<PiecePosition>,
     instruction: Option<Instruction>,
-    cost: u8,
-    depth: u8,
+    cost: u16,
+    depth: u16,
 }
 
 impl PartialEq for Step {
@@ -37,28 +37,41 @@ impl PartialOrd for Step {
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Placement([(i8, i8); 4], SpinKind);
 
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub enum Path {
+    HoldOnly,
+    Normal {
+        hold: bool,
+        cost: u16,
+        instructions: Vec<Instruction>,
+        piece: PieceState,
+    },
+}
+
 pub struct MoveGenerator {
+    original_piece: PieceKind,
     // BFS Tree for known step tracking and later path lookup
     tree: HashMap<PiecePosition, Step>,
     // Priority queue
     next: BinaryHeap<Reverse<Step>>,
     // Deduplicated lockable positions
-    pub locked: HashMap<Placement, (PieceState, PiecePosition)>,
+    locked: HashMap<Placement, (PieceState, PiecePosition, u16)>,
     hold_only_move: bool,
 }
 
 impl MoveGenerator {
     pub fn generate_for<B: Board>(state: &GameState<B>, use_hold: bool) -> Result<Self, ()> {
+        let mut state = state.clone();
+
+        let spawn = state.spawn_next().ok_or(())?;
+
         let mut gen = Self {
+            original_piece: spawn.pos.kind,
             tree: HashMap::new(),
             next: BinaryHeap::new(),
             locked: HashMap::new(),
             hold_only_move: false,
         };
-
-        let mut state = state.clone();
-
-        let spawn = state.spawn_next().ok_or(())?;
         // eprintln!("spawn {:?}", spawn);
         gen.generate_internal(&state, spawn);
 
@@ -95,7 +108,7 @@ impl MoveGenerator {
             // eprintln!("take {:?}", &step.0.piece);
             let piece = step.0.piece;
             let parent = *self.tree.get(&piece.pos).unwrap();
-            let dropped = state.sonic_drop(&piece);
+            let dropped = state.sonic_drop(piece);
             if let Some(dropped) = dropped {
                 self.check_write(
                     state,
@@ -123,7 +136,9 @@ impl MoveGenerator {
                 cells.sort();
                 let placement = Placement(cells, dropped.spin);
 
-                self.locked.entry(placement).or_insert((dropped, piece.pos));
+                self.locked
+                    .entry(placement)
+                    .or_insert((dropped, piece.pos, step.0.cost));
             }
         }
         // eprintln!("{}", self.locked.len());
@@ -142,7 +157,7 @@ impl MoveGenerator {
         };
 
         let cost = if instruction == Instruction::SonicDrop {
-            3 * (parent.piece.pos.y - piece.pos.y) as u8
+            3 * (parent.piece.pos.y - piece.pos.y) as u16
         } else if parent.instruction == Some(instruction) {
             2
         } else {
@@ -170,11 +185,47 @@ impl MoveGenerator {
         let mut vec = self
             .locked
             .values()
-            .map(|(piece, _)| Move::Place(*piece))
+            .map(|(piece, _, _)| Move::Place(*piece))
             .collect::<Vec<_>>();
         if self.hold_only_move {
             vec.push(Move::Hold);
         }
         vec
+    }
+
+    pub fn moves_with_cost(&self) -> Vec<(Move, u16)> {
+        let mut vec = self
+            .locked
+            .values()
+            .map(|(piece, _, cost)| (Move::Place(*piece), *cost))
+            .collect::<Vec<_>>();
+        if self.hold_only_move {
+            vec.push((Move::Hold, 0));
+        }
+        vec
+    }
+
+    pub fn rebuild_path(&self, mv: Move) -> Path {
+        match mv {
+            Move::Hold => Path::HoldOnly,
+            Move::Place(piece) => {
+                let mut instructions = Vec::new();
+                let mut piece = piece;
+                let mut parent = self.tree[&piece.pos].parent;
+                while let Some(p) = parent {
+                    let step = self.tree[&p];
+                    instructions.push(step.instruction.unwrap());
+                    piece = step.piece;
+                    parent = step.parent;
+                }
+                instructions.reverse();
+                Path::Normal {
+                    hold: piece.pos.kind != self.original_piece,
+                    cost: self.tree[&piece.pos].cost,
+                    instructions,
+                    piece,
+                }
+            }
+        }
     }
 }
