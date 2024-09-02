@@ -308,6 +308,7 @@ pub trait Board: Clone + Default {
     fn height_of(&self, x: i8) -> u32;
     fn is_empty(&self) -> bool;
     fn distance_to_ground(&self, pos: (i8, i8)) -> u32;
+    fn add_garbage_line(&mut self, x: i8);
     fn add_piece_and_clear(&mut self, piece: PieceState) -> u32;
 
     fn collides(&self, piece: PiecePosition) -> bool {
@@ -355,6 +356,16 @@ impl Board for BitBoard {
         } else {
             (!self.cols[x as usize] << (u64::BITS as i8 - y)).leading_ones()
         }
+    }
+
+    fn add_garbage_line(&mut self, x: i8) {
+        debug_assert!(0 <= x && x < 10);
+        self.cols.iter_mut().enumerate().for_each(|(pos, col)| {
+            *col <<= 1;
+            if pos != x as usize {
+                *col |= 1;
+            }
+        });
     }
 
     fn add_piece_and_clear(&mut self, piece: PieceState) -> u32 {
@@ -495,6 +506,20 @@ impl Board for ColoredBoard {
             .rev()
             .take_while(|&c| *c == CellKind::None)
             .count()) as u32
+    }
+
+    fn add_garbage_line(&mut self, col: i8) {
+        debug_assert!(0 <= col && col < 10);
+        for x in 0..10 {
+            for y in 0..62 {
+                self.cols[x][y + 1] = self.cols[x][y];
+            }
+            self.cols[x][0] = if x == col as usize {
+                CellKind::Gbg
+            } else {
+                CellKind::None
+            };
+        }
     }
 
     fn add_piece_and_clear(&mut self, piece: PieceState) -> u32 {
@@ -746,6 +771,18 @@ impl<B: Board> GameState<B> {
     pub fn legal_moves(&self, use_hold: bool) -> Result<MoveGenerator, ()> {
         let gen = MoveGenerator::generate_for(self, use_hold)?;
         Ok(gen)
+    }
+
+    pub fn add_garbage(&mut self, amount: u32) {
+        let mut rng = thread_rng();
+        let mut x = rng.gen_range(0..10);
+        for _ in 0..amount {
+            // 30% chance to change column
+            if rng.gen_bool(0.3) {
+                x = rng.gen_range(0..10);
+            }
+            self.board.add_garbage_line(x);
+        }
     }
 }
 

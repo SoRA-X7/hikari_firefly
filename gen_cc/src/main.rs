@@ -24,27 +24,18 @@ const TBP_LOGGING: bool = false;
 async fn main() {
     eprintln!("gen_cc");
     let mut game = Game::new();
-    let players = game.start(&args().nth(1).expect("usage: gen_cc <exe_path>"));
+    game.start(&args().nth(1).expect("usage: gen_cc <exe_path>"));
 
     let mut update_interval = tokio::time::interval(std::time::Duration::from_millis(16));
     loop {
         update_interval.tick().await;
-        game.update();
-    }
-
-    tokio::select! {
-        _ = players[0] => {
-            eprintln!("player 0 exited");
-        }
-        _ = players[1] => {
-            eprintln!("player 1 exited");
-        }
+        game.update().await;
     }
 }
 
 #[derive(Debug)]
 struct Game {
-    // players: Vec<Arc<Player>>,
+    players: Vec<PlayerHandle>,
     frame: u64,
     updater: UpdateNotifier,
     damage_buffer: Option<DamageData>,
@@ -56,6 +47,7 @@ impl Game {
     fn new() -> Self {
         let (sender, receiver) = std::sync::mpsc::channel();
         Self {
+            players: Vec::new(),
             frame: 0,
             updater: UpdateNotifier::new(),
             damage_buffer: None,
@@ -64,24 +56,23 @@ impl Game {
         }
     }
 
-    fn start(&mut self, exe_path: &str) -> Vec<JoinHandle<()>> {
-        let p0 = self.spawn_player(exe_path, 0);
-        let p1 = self.spawn_player(exe_path, 1);
-        vec![p0, p1]
+    fn start(&mut self, exe_path: &str) {
+        let mut players = Vec::new();
+        for i in 0..2 {
+            players.push(self.spawn_player(exe_path, i as u32));
+        }
+        self.players = players;
     }
 
-    fn spawn_player(&mut self, exe_path: &str, id: u32) -> JoinHandle<()> {
+    fn spawn_player(&mut self, exe_path: &str, id: u32) -> PlayerHandle {
         let updater = self.updater.clone();
         let exe_path = exe_path.to_owned();
         let damage_sender = self.damage_sender.clone();
-        let p = tokio::spawn(async move {
-            let mut p = Player::new(id, &exe_path);
-            p.run(updater, damage_sender).await;
-        });
+        let p = PlayerHandle::new(id, &exe_path, updater, damage_sender);
         p
     }
 
-    fn update(&mut self) {
+    async fn update(&mut self) {
         self.frame += 1;
         self.updater.update();
 
@@ -123,7 +114,11 @@ impl Game {
         if let Some(dmg) = self.damage_buffer.as_mut() {
             if dmg.wait == 0 {
                 // apply damage
-                eprintln!("apply damage: {:?}", dmg);
+                self.players[dmg.source as usize]
+                    .garbage_sender
+                    .send(dmg.amount)
+                    .await
+                    .unwrap();
                 self.damage_buffer = None;
             } else {
                 dmg.wait -= 1;
@@ -137,6 +132,34 @@ struct DamageData {
     amount: u32,
     source: u32,
     wait: u64,
+}
+
+#[derive(Debug)]
+struct PlayerHandle {
+    garbage_sender: tokio::sync::mpsc::Sender<u32>,
+    join_handle: JoinHandle<()>,
+}
+
+impl PlayerHandle {
+    fn new(
+        id: u32,
+        exe_path: &str,
+        updater: UpdateNotifier,
+        damage_sender: Arc<std::sync::mpsc::Sender<DamageData>>,
+    ) -> Self {
+        let (garbage_sender, garbage_recv) = tokio::sync::mpsc::channel(16);
+
+        let exe_path = exe_path.to_owned();
+        let join_handle = tokio::spawn(async move {
+            let mut p = Player::new(id, &exe_path);
+            p.run(updater, damage_sender, garbage_recv).await;
+        });
+
+        Self {
+            garbage_sender,
+            join_handle,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -240,6 +263,7 @@ impl Player {
         &mut self,
         update_notifier: UpdateNotifier,
         damage_sender: Arc<std::sync::mpsc::Sender<DamageData>>,
+        mut garbage_recv: tokio::sync::mpsc::Receiver<u32>,
     ) {
         let msg = self.recv.recv().await;
         if let Some(tbp::BotMessage::Info {
@@ -289,9 +313,13 @@ impl Player {
         update_notifier.wait_for_frames(60).await;
 
         while self.disconnected.load(std::sync::atomic::Ordering::Relaxed) == false {
-            self.run_loop(update_notifier.clone(), damage_sender.clone())
-                .await
-                .unwrap();
+            self.run_loop(
+                update_notifier.clone(),
+                damage_sender.clone(),
+                &mut garbage_recv,
+            )
+            .await
+            .unwrap();
         }
     }
 
@@ -299,7 +327,25 @@ impl Player {
         &mut self,
         update_notifier: UpdateNotifier,
         damage_sender: Arc<std::sync::mpsc::Sender<DamageData>>,
+        garbage_recv: &mut tokio::sync::mpsc::Receiver<u32>,
     ) -> Result<(), BotStopReason> {
+        while let Ok(garbage) = garbage_recv.try_recv() {
+            self.state.add_garbage(garbage);
+            let msg = tbp::FrontendMessage::Start(tbp::Start {
+                board: self.state.board.clone().into_colored(CellKind::Gbg),
+                queue: self.state.queue.clone().into_iter().collect(),
+                hold: self.state.hold,
+                combo: (self.state.ren + 1) as u32,
+                back_to_back: self.state.b2b,
+                randomizer: tbp::Randomizer::SevenBag {
+                    bag_state: self.state.bag.0.clone(),
+                },
+            });
+            eprintln!("apply garbage: {:?}, {:?}", garbage, msg);
+            self.send.send(msg).await.unwrap();
+            update_notifier.wait_for_frames(10).await;
+        }
+
         self.state
             .clone()
             .spawn_next()
@@ -345,19 +391,16 @@ impl Player {
 
         loop {
             match self.recv.recv().await {
-                Some(tbp::BotMessage::Suggestion {
-                    moves,
-                    move_info: _,
-                }) => {
+                Some(tbp::BotMessage::Suggestion { moves, move_info }) => {
                     for (i, piece) in moves.iter().enumerate() {
                         if let Some(&(hold_before, mv, cost)) = candidates.get(&(*piece).into()) {
-                            eprintln!(
-                                "pick: #{} {:?} at cost {}, elapsed {}us",
-                                i,
-                                mv,
-                                cost,
-                                timer.elapsed().as_micros()
-                            );
+                            // eprintln!(
+                            //     "pick: #{} {:?} at cost {}, elapsed {}us",
+                            //     i,
+                            //     mv,
+                            //     cost,
+                            //     timer.elapsed().as_micros()
+                            // );
 
                             if hold_before {
                                 update_notifier.wait_for_frames(2).await;
@@ -400,7 +443,7 @@ impl Player {
                             return Ok(());
                         }
                     }
-                    eprintln!("move {:?} not found", moves);
+                    eprintln!("move {:?} not found {:?}", moves, move_info);
                     return Err(BotStopReason::Death);
                 }
                 Some(_) => {
@@ -412,7 +455,7 @@ impl Player {
     }
 
     async fn advance(&mut self, mv: Move) -> Result<PlacementResult, ()> {
-        eprintln!("advance: {:?}", mv);
+        // eprintln!("advance: {:?}", mv);
         let pl = self.state.advance(mv);
 
         // Add piece
@@ -422,7 +465,7 @@ impl Player {
             .await
             .map_err(|_| ())?;
 
-        eprintln!("queue: {:?}, hold: {:?}", self.state.queue, self.state.hold);
+        // eprintln!("queue: {:?}, hold: {:?}", self.state.queue, self.state.hold);
         if pl.death {
             Err(())
         } else {
