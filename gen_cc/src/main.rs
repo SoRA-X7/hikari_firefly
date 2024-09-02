@@ -1,10 +1,13 @@
 use std::{
     collections::HashMap,
+    env::args,
     process::Stdio,
     sync::{atomic::AtomicBool, Arc},
+    time::Instant,
 };
 
 use game::tetris::*;
+use parking_lot::Mutex;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt},
     process::Command,
@@ -15,11 +18,13 @@ use tokio::{
     task::JoinHandle,
 };
 
+const TBP_LOGGING: bool = false;
+
 #[tokio::main]
 async fn main() {
-    println!("gen_cc");
+    eprintln!("gen_cc");
     let mut game = Game::new();
-    let p1 = game.start();
+    let players = game.start(&args().nth(1).expect("usage: gen_cc <exe_path>"));
 
     let mut update_interval = tokio::time::interval(std::time::Duration::from_millis(16));
     loop {
@@ -27,7 +32,14 @@ async fn main() {
         game.update();
     }
 
-    p1.await.expect("join failed");
+    tokio::select! {
+        _ = players[0] => {
+            eprintln!("player 0 exited");
+        }
+        _ = players[1] => {
+            eprintln!("player 1 exited");
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -35,36 +47,96 @@ struct Game {
     // players: Vec<Arc<Player>>,
     frame: u64,
     updater: UpdateNotifier,
+    damage_buffer: Option<DamageData>,
+    damage_queue: std::sync::mpsc::Receiver<DamageData>,
+    damage_sender: Arc<std::sync::mpsc::Sender<DamageData>>,
 }
 
 impl Game {
     fn new() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel();
         Self {
             frame: 0,
             updater: UpdateNotifier::new(),
+            damage_buffer: None,
+            damage_queue: receiver,
+            damage_sender: Arc::new(sender),
         }
     }
 
-    fn start(&mut self) -> JoinHandle<()> {
+    fn start(&mut self, exe_path: &str) -> Vec<JoinHandle<()>> {
+        let p0 = self.spawn_player(exe_path, 0);
+        let p1 = self.spawn_player(exe_path, 1);
+        vec![p0, p1]
+    }
+
+    fn spawn_player(&mut self, exe_path: &str, id: u32) -> JoinHandle<()> {
         let updater = self.updater.clone();
-        let p1 = tokio::spawn(async move {
-            let mut p1 = Player::new(
-                1,
-                "/Users/sora_x7/workspace/cold-clear-2/target/release/cold-clear-2",
-            );
-            p1.run(updater).await;
+        let exe_path = exe_path.to_owned();
+        let damage_sender = self.damage_sender.clone();
+        let p = tokio::spawn(async move {
+            let mut p = Player::new(id, &exe_path);
+            p.run(updater, damage_sender).await;
         });
-        p1
+        p
     }
 
     fn update(&mut self) {
         self.frame += 1;
         self.updater.update();
-    }
 
-    fn register_damage(&self, id: u32, damage: u32) {
-        // TODO;
+        // do damage calculation
+        while let Ok(dmg) = self.damage_queue.try_recv() {
+            if dmg.amount == 0 {
+                continue;
+            }
+            eprintln!("damage: {:?} from {}", dmg.amount, dmg.source);
+            if let Some(current) = self.damage_buffer.take() {
+                if current.source == dmg.source {
+                    self.damage_buffer = Some(DamageData {
+                        amount: current.amount + dmg.amount,
+                        source: current.source,
+                        wait: current.wait,
+                    });
+                } else {
+                    // 相殺
+                    let amount = dmg.amount as i32 - current.amount as i32;
+                    if amount > 0 {
+                        self.damage_buffer = Some(DamageData {
+                            amount: amount as u32,
+                            source: dmg.source,
+                            wait: dmg.wait,
+                        });
+                    } else if amount < 0 {
+                        self.damage_buffer = Some(DamageData {
+                            amount: -amount as u32,
+                            source: current.source,
+                            wait: current.wait,
+                        });
+                    }
+                }
+            } else {
+                self.damage_buffer = Some(dmg);
+            }
+        }
+
+        if let Some(dmg) = self.damage_buffer.as_mut() {
+            if dmg.wait == 0 {
+                // apply damage
+                eprintln!("apply damage: {:?}", dmg);
+                self.damage_buffer = None;
+            } else {
+                dmg.wait -= 1;
+            }
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DamageData {
+    amount: u32,
+    source: u32,
+    wait: u64,
 }
 
 #[derive(Debug)]
@@ -114,7 +186,9 @@ impl Player {
         tokio::spawn(async move {
             loop {
                 if let Some(s) = reader.next_line().await.expect("read line") {
-                    eprintln!("[RECV/{}] {}", id, s);
+                    if TBP_LOGGING {
+                        eprintln!("[RECV/{}] {}", id, s);
+                    }
                     let msg = serde_json::from_str(&s).expect("deserialize json");
                     bot_send.send(msg).await.expect("send");
                 } else {
@@ -133,7 +207,9 @@ impl Player {
                 match bot_recv.recv().await {
                     Some(msg) => {
                         let s = serde_json::to_string(&msg).expect("serialize json");
-                        eprintln!("[SEND/{}] {}", id, s);
+                        if TBP_LOGGING {
+                            eprintln!("[SEND/{}] {}", id, s);
+                        }
                         writer.write_all(s.as_bytes()).await.expect("write");
                         writer.write_all("\n".as_bytes()).await.expect("write");
                         writer.flush().await.expect("flush");
@@ -160,7 +236,11 @@ impl Player {
         }
     }
 
-    async fn run(&mut self, update_notifier: UpdateNotifier) {
+    async fn run(
+        &mut self,
+        update_notifier: UpdateNotifier,
+        damage_sender: Arc<std::sync::mpsc::Sender<DamageData>>,
+    ) {
         let msg = self.recv.recv().await;
         if let Some(tbp::BotMessage::Info {
             name,
@@ -209,11 +289,17 @@ impl Player {
         update_notifier.wait_for_frames(60).await;
 
         while self.disconnected.load(std::sync::atomic::Ordering::Relaxed) == false {
-            self.run_loop(update_notifier.clone()).await.unwrap();
+            self.run_loop(update_notifier.clone(), damage_sender.clone())
+                .await
+                .unwrap();
         }
     }
 
-    async fn run_loop(&mut self, update_notifier: UpdateNotifier) -> Result<(), BotStopReason> {
+    async fn run_loop(
+        &mut self,
+        update_notifier: UpdateNotifier,
+        damage_sender: Arc<std::sync::mpsc::Sender<DamageData>>,
+    ) -> Result<(), BotStopReason> {
         self.state
             .clone()
             .spawn_next()
@@ -223,6 +309,7 @@ impl Player {
             .send(tbp::FrontendMessage::Suggest)
             .await
             .map_err(|_| BotStopReason::Disconnection)?;
+        let timer = Instant::now();
 
         let mut candidates = HashMap::<PieceIdentity, (bool, Move, u16)>::new();
         let gen = {
@@ -264,7 +351,13 @@ impl Player {
                 }) => {
                     for (i, piece) in moves.iter().enumerate() {
                         if let Some(&(hold_before, mv, cost)) = candidates.get(&(*piece).into()) {
-                            eprintln!("pick: #{} {:?} at cost {}", i, mv, cost);
+                            eprintln!(
+                                "pick: #{} {:?} at cost {}, elapsed {}us",
+                                i,
+                                mv,
+                                cost,
+                                timer.elapsed().as_micros()
+                            );
 
                             if hold_before {
                                 update_notifier.wait_for_frames(2).await;
@@ -287,6 +380,15 @@ impl Player {
                                 .await
                                 .map_err(|_| BotStopReason::Disconnection)?;
 
+                            // send damage
+
+                            damage_sender
+                                .send(DamageData {
+                                    amount: pl.attack(),
+                                    source: self.id,
+                                    wait: 60,
+                                })
+                                .unwrap();
                             // placement delay
                             let delay = if pl.lines_cleared > 0 && !pl.is_pc {
                                 15
