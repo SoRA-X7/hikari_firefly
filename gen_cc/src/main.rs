@@ -7,7 +7,8 @@ use std::{
 };
 
 use game::tetris::*;
-use parking_lot::Mutex;
+use serde::{ser::SerializeSeq, Serialize};
+use smallvec::SmallVec;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt},
     process::Command,
@@ -23,14 +24,50 @@ const TBP_LOGGING: bool = false;
 #[tokio::main]
 async fn main() {
     eprintln!("gen_cc");
+    let exe_path = args().nth(1).expect("usage: gen_cc <exe_path> <out_dir>");
+    let out_dir = args().nth(2).expect("usage: gen_cc <exe_path> <out_dir>");
+
+    let (out_sender, mut out_receiver) = tokio::sync::mpsc::channel::<Replay>(16);
+    let file_writer = tokio::spawn(async move {
+        let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+        let mut replays = vec![];
+        let mut file_id = 0;
+        loop {
+            if let Some(s) = out_receiver.recv().await {
+                // eprintln!("{:?}", s);
+                replays.push(s);
+
+                if replays.len() >= 100 {
+                    let file_name = format!("{}/gen_cc_{}_{}.bin", out_dir, timestamp, file_id);
+                    let mut file = std::fs::File::create(&file_name).expect("create file");
+                    rmp_serde::encode::write_named(&mut file, &replays).expect("encode_write");
+                    replays.clear();
+                    file_id += 1;
+
+                    eprintln!("file written: {}", &file_name);
+                }
+            } else {
+                if !replays.is_empty() {
+                    let file_name = format!("{}/gen_cc_{}_{}.bin", out_dir, timestamp, file_id);
+                    let mut file = std::fs::File::create(&file_name).expect("create file");
+                    rmp_serde::encode::write_named(&mut file, &replays).expect("encode_write");
+
+                    eprintln!("file written: {}", &file_name);
+                }
+                break;
+            }
+        }
+    });
+
     let mut game = Game::new();
-    game.start(&args().nth(1).expect("usage: gen_cc <exe_path>"));
+    game.start(&exe_path, out_sender);
 
     let mut update_interval = tokio::time::interval(std::time::Duration::from_millis(16));
     loop {
         update_interval.tick().await;
         game.update().await;
     }
+    file_writer.await.unwrap();
 }
 
 #[derive(Debug)]
@@ -56,19 +93,25 @@ impl Game {
         }
     }
 
-    fn start(&mut self, exe_path: &str) {
+    fn start(&mut self, exe_path: &str, replay_sender: tokio::sync::mpsc::Sender<Replay>) {
+        let replay_sender = Arc::new(replay_sender);
         let mut players = Vec::new();
         for i in 0..2 {
-            players.push(self.spawn_player(exe_path, i as u32));
+            players.push(self.spawn_player(exe_path, i as u32, replay_sender.clone()));
         }
         self.players = players;
     }
 
-    fn spawn_player(&mut self, exe_path: &str, id: u32) -> PlayerHandle {
+    fn spawn_player(
+        &mut self,
+        exe_path: &str,
+        id: u32,
+        replay_sender: Arc<tokio::sync::mpsc::Sender<Replay>>,
+    ) -> PlayerHandle {
         let updater = self.updater.clone();
         let exe_path = exe_path.to_owned();
         let damage_sender = self.damage_sender.clone();
-        let p = PlayerHandle::new(id, &exe_path, updater, damage_sender);
+        let p = PlayerHandle::new(id, &exe_path, updater, damage_sender, replay_sender);
         p
     }
 
@@ -146,13 +189,15 @@ impl PlayerHandle {
         exe_path: &str,
         updater: UpdateNotifier,
         damage_sender: Arc<std::sync::mpsc::Sender<DamageData>>,
+        replay_sender: Arc<tokio::sync::mpsc::Sender<Replay>>,
     ) -> Self {
         let (garbage_sender, garbage_recv) = tokio::sync::mpsc::channel(16);
 
         let exe_path = exe_path.to_owned();
         let join_handle = tokio::spawn(async move {
             let mut p = Player::new(id, &exe_path);
-            p.run(updater, damage_sender, garbage_recv).await;
+            p.run(updater, damage_sender, garbage_recv, replay_sender)
+                .await;
         });
 
         Self {
@@ -264,6 +309,7 @@ impl Player {
         update_notifier: UpdateNotifier,
         damage_sender: Arc<std::sync::mpsc::Sender<DamageData>>,
         mut garbage_recv: tokio::sync::mpsc::Receiver<u32>,
+        replay_sender: Arc<tokio::sync::mpsc::Sender<Replay>>,
     ) {
         let msg = self.recv.recv().await;
         if let Some(tbp::BotMessage::Info {
@@ -317,6 +363,7 @@ impl Player {
                 update_notifier.clone(),
                 damage_sender.clone(),
                 &mut garbage_recv,
+                &replay_sender,
             )
             .await
             .unwrap();
@@ -328,6 +375,7 @@ impl Player {
         update_notifier: UpdateNotifier,
         damage_sender: Arc<std::sync::mpsc::Sender<DamageData>>,
         garbage_recv: &mut tokio::sync::mpsc::Receiver<u32>,
+        replay_sender: &tokio::sync::mpsc::Sender<Replay>,
     ) -> Result<(), BotStopReason> {
         while let Ok(garbage) = garbage_recv.try_recv() {
             self.state.add_garbage(garbage);
@@ -346,7 +394,8 @@ impl Player {
             update_notifier.wait_for_frames(10).await;
         }
 
-        self.state
+        let current = self
+            .state
             .clone()
             .spawn_next()
             .ok_or(BotStopReason::Death)?;
@@ -362,6 +411,16 @@ impl Player {
             self.state
                 .legal_moves(true)
                 .map_err(|_| BotStopReason::Death)?
+        };
+        let replay = ReplayState {
+            board: self.state.board.clone(),
+            queue: self.state.queue.iter().copied().collect(),
+            current: self.state.queue[0],
+            unhold: self.state.hold.map(|x| x).unwrap_or(self.state.queue[1]),
+            hold: self.state.hold,
+            ren: self.state.ren as i8,
+            b2b: self.state.b2b,
+            bag: self.state.bag.0.iter().collect(),
         };
 
         for &(mv, cost) in gen.moves_with_cost().iter() {
@@ -402,6 +461,14 @@ impl Player {
                             //     timer.elapsed().as_micros()
                             // );
 
+                            let replay = Replay {
+                                player_id: self.id,
+                                frame: 0,
+                                state: replay,
+                                action: (*piece).into(),
+                            };
+                            let replay_send = replay_sender.send(replay);
+
                             if hold_before {
                                 update_notifier.wait_for_frames(2).await;
                                 self.advance(Move::Hold)
@@ -440,6 +507,7 @@ impl Player {
                             };
 
                             update_notifier.wait_for_frames(delay).await;
+                            replay_send.await.unwrap();
                             return Ok(());
                         }
                     }
@@ -508,7 +576,7 @@ impl UpdateNotifier {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 struct PieceIdentity {
     cells: [(i8, i8); 4],
     spin: SpinKind,
@@ -525,4 +593,37 @@ impl From<PieceState> for PieceIdentity {
             spin: piece.spin,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct Replay {
+    player_id: u32,
+    frame: u64,
+    state: ReplayState,
+    action: PieceIdentity,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReplayState {
+    #[serde(serialize_with = "serialize_board")]
+    board: BitBoard,
+    current: PieceKind,
+    unhold: PieceKind,
+    queue: SmallVec<[PieceKind; 18]>,
+    hold: Option<PieceKind>,
+    ren: i8,
+    b2b: bool,
+    bag: SmallVec<[PieceKind; 7]>,
+}
+
+fn serialize_board<S>(board: &BitBoard, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let mut cols = serializer.serialize_seq(Some(10))?;
+    for x in 0..10 {
+        let cells: Vec<bool> = (0..64).map(|y| board.occupied((x, y as i8))).collect();
+        cols.serialize_element(&cells)?;
+    }
+    cols.end()
 }
