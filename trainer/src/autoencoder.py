@@ -15,8 +15,27 @@ H = 64
 L1 = 64
 L2 = 16
 
-encoder = nn.Sequential(nn.Linear(W * H, L1), nn.ReLU(), nn.Linear(L1, L2))
-decoder = nn.Sequential(nn.Linear(L2, L1), nn.ReLU(), nn.Linear(L1, W * H))
+# encoder = nn.Sequential(nn.Linear(W * H, L1), nn.ReLU(), nn.Linear(L1, L2))
+# decoder = nn.Sequential(nn.Linear(L2, L1), nn.ReLU(), nn.Linear(L1, W * H))
+
+encoder = nn.Sequential(  # 1x10x64
+    nn.Conv2d(1, 16, 3),  # 16x8x62
+    nn.ReLU(),
+    nn.Conv2d(16, 32, 3),  # 32x6x60
+    nn.ReLU(),
+    nn.Flatten(0),
+    nn.Linear(32 * 6 * 60, 64),
+    nn.ReLU(),
+)
+decoder = nn.Sequential(
+    nn.Linear(64, 32 * 6 * 60),
+    nn.ReLU(),
+    nn.Unflatten(0, (32, 6, 60)),
+    nn.ConvTranspose2d(32, 16, 3),  # 16x8x62
+    nn.ReLU(),
+    nn.ConvTranspose2d(16, 1, 3),  # 1x10x64
+    nn.ReLU(),
+)
 
 
 # define the LightningModule
@@ -30,7 +49,6 @@ class LitAutoEncoder(L.LightningModule):
         # training_step defines the train loop.
         # it is independent of forward
         x = batch
-        x = x.view(x.size(0), -1)
         z = self.encoder(x)
         x_hat = self.decoder(z)
         # print(x, x_hat)
@@ -41,7 +59,6 @@ class LitAutoEncoder(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x = batch
-        x = x.view(x.size(0), -1)
         z = self.encoder(x)
         x_hat = self.decoder(z)
         loss = nn.functional.mse_loss(x_hat, x)
@@ -49,7 +66,7 @@ class LitAutoEncoder(L.LightningModule):
         self.log("test_loss", loss)
 
     def configure_optimizers(self):
-        optimizer = Adam(self.parameters(), lr=3e-3)
+        optimizer = Adam(self.parameters(), lr=3e-4)
         return optimizer
 
 
@@ -102,20 +119,22 @@ def main():
 def load_test():
     with torch.no_grad():
         autoencoder = LitAutoEncoder.load_from_checkpoint(
-            "./lightning_logs/version_26/checkpoints/epoch=29-step=59640.ckpt",
+            "./lightning_logs/version_49/checkpoints/epoch=29-step=59640.ckpt",
             encoder=encoder,
             decoder=decoder,
         )
         dataset = StackerDataset(Path("../data"))
         for data0 in dataset:
-            data0 = data0.to(autoencoder.device).view(1, -1)
-            hat: Tensor = autoencoder.decoder(autoencoder.encoder(data0))
+            data0 = data0.to(autoencoder.device)
             print(data0)
+            hat: Tensor = autoencoder.decoder(autoencoder.encoder(data0.unsqueeze(0)))
             print(hat.view(10, 64))
             print(nn.functional.mse_loss(data0, hat))
             fig, axes = plt.subplots(1, 2)
             axes[0].imshow(data0.view(10, 64).T.flip(0).cpu(), cmap="binary_r")
+            axes[0].set_title("Original")
             axes[1].imshow(hat.view(10, 64).T.flip(0).cpu(), cmap="binary_r")
+            axes[1].set_title("Reconstructed")
             fig.tight_layout()
             plt.show()
 
