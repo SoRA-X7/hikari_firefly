@@ -120,6 +120,9 @@ class Replay(BaseModel):
 
         return board, meta, action
 
+    def into_tensor_only_board(self) -> torch.Tensor:
+        return torch.tensor(self.state.board, dtype=torch.float32)
+
 
 def from_msgpack(file_path: str) -> list[Replay]:
 
