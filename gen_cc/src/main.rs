@@ -27,6 +27,28 @@ async fn main() {
     let exe_path = args().nth(1).expect("usage: gen_cc <exe_path> <out_dir>");
     let out_dir = args().nth(2).expect("usage: gen_cc <exe_path> <out_dir>");
 
+    let workers = (0..4)
+        .map(|i| {
+            let exe_path = exe_path.to_owned();
+            let out_dir = out_dir.to_owned();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(i * 2)).await;
+                loop {
+                    eprintln!("worker {} started", i);
+                    gen_cc(&exe_path, &out_dir).await;
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for w in workers {
+        w.await.expect("worker");
+    }
+}
+
+async fn gen_cc(exe_path: &str, out_dir: &str) {
+    let exe_path = exe_path.to_owned();
+    let out_dir = out_dir.to_owned();
     let (out_sender, mut out_receiver) = tokio::sync::mpsc::channel::<Replay>(16);
     let file_writer = tokio::spawn(async move {
         let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
@@ -63,11 +85,21 @@ async fn main() {
     game.start(&exe_path, out_sender);
 
     let mut update_interval = tokio::time::interval(std::time::Duration::from_millis(16));
-    loop {
-        update_interval.tick().await;
-        game.update().await;
-    }
-    file_writer.await.unwrap();
+    let update_worker = tokio::spawn(async move {
+        loop {
+            update_interval.tick().await;
+            game.update().await;
+        }
+    });
+
+    tokio::spawn(async {
+        tokio::select! {
+            _ = update_worker => {}
+            _ = file_writer => {}
+        };
+    })
+    .await
+    .unwrap();
 }
 
 #[derive(Debug)]
@@ -124,7 +156,7 @@ impl Game {
             if dmg.amount == 0 {
                 continue;
             }
-            eprintln!("damage: {:?} from {}", dmg.amount, dmg.source);
+            // eprintln!("damage: {:?} from {}", dmg.amount, dmg.source);
             if let Some(current) = self.damage_buffer.take() {
                 if current.source == dmg.source {
                     self.damage_buffer = Some(DamageData {
@@ -389,7 +421,7 @@ impl Player {
                     bag_state: self.state.bag.0.clone(),
                 },
             });
-            eprintln!("apply garbage: {:?}, {:?}", garbage, msg);
+            // eprintln!("apply garbage: {:?}, {:?}", garbage, msg);
             self.send.send(msg).await.unwrap();
             update_notifier.wait_for_frames(10).await;
         }
