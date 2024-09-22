@@ -19,24 +19,45 @@ L2 = 16
 # encoder = nn.Sequential(nn.Linear(W * H, L1), nn.ReLU(), nn.Linear(L1, L2))
 # decoder = nn.Sequential(nn.Linear(L2, L1), nn.ReLU(), nn.Linear(L1, W * H))
 
+# encoder = nn.Sequential(
+#     nn.Flatten(1),
+#     nn.Linear(W * H, 256),
+#     nn.ReLU(),
+#     nn.Linear(256, 128),
+#     nn.ReLU(),
+#     nn.Linear(128, 64),
+#     nn.Sigmoid(),
+# )
+# decoder = nn.Sequential(
+#     nn.Linear(64, 128),
+#     nn.ReLU(),
+#     nn.Linear(128, 256),
+#     nn.ReLU(),
+#     nn.Linear(256, W * H),
+#     nn.Sigmoid(),
+#     nn.Unflatten(1, (1, W, H)),
+# )
+
 encoder = nn.Sequential(  # 1x10x64
     nn.Conv2d(1, 16, 3),  # 16x8x62
+    nn.MaxPool2d(2),  # 16x4x31
     nn.ReLU(),
-    nn.Conv2d(16, 32, 3),  # 32x6x60
+    nn.Conv2d(16, 32, 3),  # 32x2x29
+    nn.MaxPool2d(2),  # 32x1x14
     nn.ReLU(),
     nn.Flatten(1),
     nn.Dropout(0.2),
-    nn.Linear(32 * 6 * 60, 128),
-    nn.ReLU(),
+    nn.Linear(32 * 1 * 14, 64),
+    nn.Sigmoid(),
 )
 decoder = nn.Sequential(
-    nn.Linear(128, 32 * 6 * 60),
+    nn.Linear(64, 32 * 1 * 14),
     nn.ReLU(),
-    nn.Unflatten(1, (32, 6, 60)),
-    nn.ConvTranspose2d(32, 16, 3),  # 16x8x62
+    nn.Unflatten(1, (32, 1, 14)),
+    nn.ConvTranspose2d(32, 16, 3, stride=2),  # 16x4x31
     nn.ReLU(),
-    nn.ConvTranspose2d(16, 1, 3),  # 1x10x64
-    nn.ReLU(),
+    nn.ConvTranspose2d(16, 1, 3, stride=2),  # 1x10x64
+    nn.Sigmoid(),
 )
 
 
@@ -110,6 +131,7 @@ def main():
     print(len(train_set), len(valid_set))
 
     summary(encoder, (64, 1, 10, 64))
+    summary(decoder, (64, 64))
     train_loader = DataLoader(train_set, batch_size=64, shuffle=True)
     valid_loader = DataLoader(valid_set, batch_size=64)
     autoencoder = LitAutoEncoder(encoder, decoder, learning_rate=1e-3)
@@ -125,7 +147,7 @@ def main():
 def load_test():
     with torch.no_grad():
         autoencoder = LitAutoEncoder.load_from_checkpoint(
-            "./lightning_logs/version_79/checkpoints/epoch=242-step=52731.ckpt",
+            "./lightning_logs/version_86/checkpoints/epoch=999-step=217000.ckpt",
             encoder=encoder,
             decoder=decoder,
         )
@@ -146,5 +168,5 @@ def load_test():
 
 
 if __name__ == "__main__":
-    # main()
-    load_test()
+    main()
+    # load_test()

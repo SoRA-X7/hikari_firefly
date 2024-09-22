@@ -3,6 +3,7 @@ import torch
 
 import lightning as L
 
+
 class LitNNUE(L.LightningModule):
     def __init__(self, vocab_size):
         super().__init__()
@@ -39,7 +40,7 @@ class NNUE(nn.Module):
 
         # Remember that we order the accumulators for 2 perspectives based on who is to move.
         # So we blend two possible orderings by interpolating between `stm` and `1-stm` tensors.
-        accumulator = (stm * w)
+        accumulator = stm * w
 
         # Run the linear layers and use clamp_ as ClippedReLU
         l1_x = torch.clamp(accumulator, 0.0, 1.0)

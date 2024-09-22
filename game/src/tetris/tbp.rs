@@ -35,10 +35,19 @@ pub enum BotMessage {
         features: Vec<String>,
     },
     Ready,
+    Error {
+        reason: BotErrorReason,
+    },
     Suggestion {
         moves: Vec<PieceState>,
         move_info: MoveInfo,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BotErrorReason {
+    UnsupportedRules,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

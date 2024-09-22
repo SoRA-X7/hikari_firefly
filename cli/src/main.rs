@@ -22,10 +22,15 @@ fn main() {
             while let Some(line) = reader.next_line().await.unwrap() {
                 if let Ok(result) = serde_json::from_str::<FrontendMessage>(&line) {
                     match result {
-                        FrontendMessage::Rules => {
-                            bot = Some(HikariFireflyBot::new(BotConfig { num_workers: 1 }));
-                            write_message(BotMessage::Ready);
-                        }
+                        FrontendMessage::Rules { randomizer } => match randomizer.as_str() {
+                            "seven_bag" => {
+                                bot = Some(HikariFireflyBot::new(BotConfig { num_workers: 1 }));
+                                write_message(BotMessage::Ready);
+                            }
+                            _ => write_message(BotMessage::Error {
+                                reason: BotErrorReason::UnsupportedRules,
+                            }),
+                        },
                         FrontendMessage::Start(start) => {
                             let Some(bot) = &bot else {
                                 break;
