@@ -18,36 +18,6 @@
       "args": [],
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "rust: cargo build"
-    },
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "Debug executable 'ordinal'",
-      "cargo": {
-        "args": ["build", "--bin=ordinal", "--package=ordinal"],
-        "filter": {
-          "name": "ordinal",
-          "kind": "bin"
-        }
-      },
-      "args": [],
-      "cwd": "${workspaceFolder}",
-      "preLaunchTask": "rust: cargo build"
-    },
-    {
-      "type": "lldb",
-      "request": "launch",
-      "name": "Debug unit tests in executable 'ordinal'",
-      "cargo": {
-        "args": ["test", "--no-run", "--bin=ordinal", "--package=ordinal"],
-        "filter": {
-          "name": "ordinal",
-          "kind": "bin"
-        }
-      },
-      "args": [],
-      "cwd": "${workspaceFolder}",
-      "preLaunchTask": "rust: cargo build"
     }
   ]
 }

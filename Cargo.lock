@@ -2511,21 +2511,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ordinal"
-version = "0.1.0"
-dependencies = [
- "dashmap",
- "enumset",
- "futures",
- "game",
- "once_cell",
- "parking_lot",
- "rand",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "ouroboros"
 version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
